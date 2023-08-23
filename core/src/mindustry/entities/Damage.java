@@ -137,6 +137,16 @@ public class Damage{
         return found ? tmpBuilding : null;
     }
 
+    public static float findLength(Bullet b, float length, boolean laser, int pierceCap){
+        if(pierceCap > 0){
+            length = findPierceLength(b, pierceCap, laser, length);
+        }else if(laser){
+            length = findLaserLength(b, length);
+        }
+
+        return length;
+    }
+
     public static float findLaserLength(Bullet b, float length){
         vec.trnsExact(b.rotation(), length);
 
@@ -149,6 +159,10 @@ public class Damage{
     }
 
     public static float findPierceLength(Bullet b, int pierceCap, float length){
+        return findPierceLength(b, pierceCap, b.type.laserAbsorb, length);
+    }
+    
+    public static float findPierceLength(Bullet b, int pierceCap, boolean laser, float length){
         vec.trnsExact(b.rotation(), length);
         rect.setPosition(b.x, b.y).setSize(vec.x, vec.y).normalize().grow(3f);
 
@@ -160,10 +174,10 @@ public class Damage{
             //add distance to list so it can be processed
             var build = world.build(x, y);
 
-            if(build != null && build.team != b.team && b.checkUnderBuild(build, x * tilesize, y * tilesize)){
+            if(build != null && build.team != b.team && build.collide(b) && b.checkUnderBuild(build, x * tilesize, y * tilesize)){
                 distances.add(b.dst(build));
 
-                if(b.type.laserAbsorb && build.absorbLasers()){
+                if(laser && build.absorbLasers()){
                     maxDst = Math.min(maxDst, b.dst(build));
                     return true;
                 }
@@ -189,7 +203,7 @@ public class Damage{
 
     /** Collides a bullet with blocks in a laser, taking into account absorption blocks. Resulting length is stored in the bullet's fdata. */
     public static float collideLaser(Bullet b, float length, boolean large, boolean laser, int pierceCap){
-        float resultLength = findPierceLength(b, pierceCap, length);
+        float resultLength = findPierceLength(b, pierceCap, laser, length);
 
         collideLine(b, b.team, b.type.hitEffect, b.x, b.y, b.rotation(), resultLength, large, laser, pierceCap);
 
@@ -223,11 +237,7 @@ public class Damage{
      * Only enemies of the specified team are damaged.
      */
     public static void collideLine(Bullet hitter, Team team, Effect effect, float x, float y, float angle, float length, boolean large, boolean laser, int pierceCap){
-        if(laser){
-            length = findLaserLength(hitter, length);
-        }else if(pierceCap > 0){
-            length = findPierceLength(hitter, pierceCap, length);
-        }
+        length = findLength(hitter, length, laser, pierceCap);
 
         collidedBlocks.clear();
         vec.trnsExact(angle, length);
@@ -237,7 +247,7 @@ public class Damage{
             seg2.set(seg1).add(vec);
             World.raycastEachWorld(x, y, seg2.x, seg2.y, (cx, cy) -> {
                 Building tile = world.build(cx, cy);
-                boolean collide = tile != null && hitter.checkUnderBuild(tile, cx * tilesize, cy * tilesize)
+                boolean collide = tile != null && tile.collide(hitter) && hitter.checkUnderBuild(tile, cx * tilesize, cy * tilesize)
                     && ((tile.team != team && tile.collide(hitter)) || hitter.type.testCollision(hitter, tile)) && collidedBlocks.add(tile.pos());
                 if(collide){
                     collided.add(collidePool.obtain().set(cx * tilesize, cy * tilesize, tile));
@@ -600,7 +610,7 @@ public class Damage{
         for(int dx = -trad; dx <= trad; dx++){
             for(int dy = -trad; dy <= trad; dy++){
                 Tile tile = world.tile(Math.round(x / tilesize) + dx, Math.round(y / tilesize) + dy);
-                if(tile != null && tile.build != null && (team == null ||team.isEnemy(tile.team())) && dx*dx + dy*dy <= trad*trad){
+                if(tile != null && tile.build != null && (team == null || team != tile.team()) && dx*dx + dy*dy <= trad*trad){
                     tile.build.damage(team, damage);
                 }
             }
@@ -618,7 +628,7 @@ public class Damage{
         return Math.max(damage - armor, minArmorDamage * damage);
     }
 
-    public static class Collided{
+    public static class Collided implements Pool.Poolable{
         public float x, y;
         public Teamc target;
 
@@ -627,6 +637,11 @@ public class Damage{
             this.y = y;
             this.target = target;
             return this;
+        }
+        
+        @Override
+        public void reset(){
+            target = null;
         }
     }
 }

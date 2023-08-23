@@ -1315,6 +1315,7 @@ public class Blocks{
 
             researchCostMultiplier = 10f;
 
+            group = BlockGroup.heat;
             size = 3;
             drawer = new DrawMulti(new DrawDefault(), new DrawHeatOutput(), new DrawHeatInput("-heat"));
             regionRotated1 = 1;
@@ -1325,6 +1326,7 @@ public class Blocks{
 
             researchCostMultiplier = 10f;
 
+            group = BlockGroup.heat;
             size = 3;
             drawer = new DrawMulti(new DrawDefault(), new DrawHeatOutput(-1, false), new DrawHeatOutput(), new DrawHeatOutput(1, false), new DrawHeatInput("-heat"));
             regionRotated1 = 1;
@@ -1494,9 +1496,10 @@ public class Blocks{
             craftEffect = new RadialEffect(Fx.heatReactorSmoke, 4, 90f, 7f);
 
             itemCapacity = 20;
+            outputItem = new ItemStack(Items.fissileMatter, 1);
+
             consumeItem(Items.thorium, 3);
             consumeLiquid(Liquids.nitrogen, 1f / 60f);
-            outputItem = new ItemStack(Items.fissileMatter, 1);
         }};
 
         //endregion
@@ -2455,6 +2458,7 @@ public class Blocks{
             consumesPower = outputsPower = true;
             range = 23;
             scaledHealth = 90;
+            fogRadius = 2;
 
             consumePowerBuffered(40000f);
         }};
@@ -2547,7 +2551,6 @@ public class Blocks{
             researchCostMultiplier = 0.4f;
         }};
 
-        //TODO stats
         fluxReactor = new VariableReactor("flux-reactor"){{
             requirements(Category.power, with(Items.graphite, 300, Items.carbide, 200, Items.oxide, 100, Items.silicon, 600, Items.surgeAlloy, 300));
             powerProduction = 120f;
@@ -2584,7 +2587,6 @@ public class Blocks{
             );
         }};
 
-        //TODO stats
         neoplasiaReactor = new HeaterGenerator("neoplasia-reactor"){{
             requirements(Category.power, with(Items.tungsten, 1000, Items.carbide, 300, Items.oxide, 150, Items.silicon, 500, Items.phaseFabric, 300, Items.surgeAlloy, 200));
 
@@ -2608,7 +2610,6 @@ public class Blocks{
             explodeSound = Sounds.largeExplosion;
 
             powerProduction = 140f;
-            rebuildable = false;
 
             ambientSound = Sounds.bioLoop;
             ambientSoundVolume = 0.2f;
@@ -2936,6 +2937,7 @@ public class Blocks{
             armor = 5f;
             alwaysUnlocked = true;
             incinerateNonBuildable = true;
+            requiresCoreZone = true;
 
             //TODO should this be higher?
             buildCostMultiplier = 0.7f;
@@ -2955,6 +2957,7 @@ public class Blocks{
             armor = 10f;
             incinerateNonBuildable = true;
             buildCostMultiplier = 0.7f;
+            requiresCoreZone = true;
 
             unitCapModifier = 15;
             researchCostMultipliers.put(Items.silicon, 0.5f);
@@ -2972,6 +2975,7 @@ public class Blocks{
             armor = 15f;
             incinerateNonBuildable = true;
             buildCostMultiplier = 0.7f;
+            requiresCoreZone = true;
 
             unitCapModifier = 15;
             researchCostMultipliers.put(Items.silicon, 0.4f);
@@ -3046,6 +3050,20 @@ public class Blocks{
 
             shoot = new ShootAlternate(3.5f);
 
+            recoils = 2;
+            drawer = new DrawTurret(){{
+                for(int i = 0; i < 2; i ++){
+                    int f = i;
+                    parts.add(new RegionPart("-barrel-" + (i == 0 ? "l" : "r")){{
+                        progress = PartProgress.recoil;
+                        recoilIndex = f;
+                        under = true;
+                        moveY = -1.5f;
+                    }});
+                }
+            }};
+
+            recoil = 0.5f;
             shootY = 3f;
             reload = 20f;
             range = 110;
@@ -3107,6 +3125,15 @@ public class Blocks{
                     }};
                 }}
             );
+
+            drawer = new DrawTurret(){{
+                parts.add(new RegionPart("-mid"){{
+                    progress = PartProgress.recoil;
+                    under = false;
+                    moveY = -1.25f;
+                }});
+            }};
+
             reload = 18f;
             range = 220f;
             size = 2;
@@ -3115,7 +3142,7 @@ public class Blocks{
             shoot.shotDelay = 5f;
             shoot.shots = 2;
 
-            recoil = 2f;
+            recoil = 1f;
             rotateSpeed = 15f;
             inaccuracy = 17f;
             shootCone = 35f;
@@ -3163,6 +3190,7 @@ public class Blocks{
             reload = 6f;
             coolantMultiplier = 1.5f;
             range = 60f;
+            shootY = 3;
             shootCone = 50f;
             targetAir = false;
             ammoUseEffect = Fx.none;
@@ -3392,18 +3420,22 @@ public class Blocks{
                     lightningLength = 10;
                 }}
             );
-
-            shoot = new ShootAlternate(){{
+            
+            shoot = new ShootBarrel(){{
+                barrels = new float[]{
+                    -4, -1.25f, 0,
+                    0, 0, 0,
+                    4, -1.25f, 0
+                };
                 shots = 4;
-                barrels = 3;
-                spread = 3.5f;
                 shotDelay = 5f;
             }};
 
-            shootY = 7f;
+            shootY = 4.5f;
             reload = 30f;
             inaccuracy = 10f;
             range = 240f;
+            consumeAmmoOnce = false;
             size = 2;
             scaledHealth = 300;
             shootSound = Sounds.missile;
@@ -3463,11 +3495,26 @@ public class Blocks{
                 }}
             );
 
+            drawer = new DrawTurret(){{
+                parts.add(new RegionPart("-side"){{
+                    progress = PartProgress.warmup;
+                    moveX = 0.6f;
+                    moveRot = -15f;
+                    mirror = true;
+                    layerOffset = 0.001f;
+                    moves.add(new PartMove(PartProgress.recoil, 0.5f, -0.5f, -8f));
+                }}, new RegionPart("-barrel"){{
+                    progress = PartProgress.recoil;
+                    moveY = -2.5f;
+                }});
+            }};
+
             size = 2;
             range = 190f;
             reload = 31f;
+            consumeAmmoOnce = false;
             ammoEjectBack = 3f;
-            recoil = 3f;
+            recoil = 0f;
             shake = 1f;
             shoot.shots = 4;
             shoot.shotDelay = 3f;
@@ -3759,7 +3806,8 @@ public class Blocks{
                     explodeRange = 20f;
                 }}
             );
-            shootY = 8.75f;
+            shootY = 10f;
+
             shoot = new ShootBarrel(){{
                 barrels = new float[]{
                 0f, 1f, 0f,
@@ -3767,10 +3815,25 @@ public class Blocks{
                 -3f, 0f, 0f,
                 };
             }};
+
+            recoils = 3;
+            drawer = new DrawTurret(){{
+                for(int i = 3; i > 0; i--){
+                    int f = i;
+                    parts.add(new RegionPart("-barrel-" + i){{
+                        progress = PartProgress.recoil;
+                        recoilIndex = f - 1;
+                        under = true;
+                        moveY = -2f;
+                    }});
+                }
+            }};
+
             reload = 8f;
             range = 200f;
             size = 3;
-            recoil = 3f;
+            recoil = 1.5f;
+            recoilTime = 10;
             rotateSpeed = 10f;
             inaccuracy = 10f;
             shootCone = 30f;
@@ -4081,6 +4144,7 @@ public class Blocks{
 
             liquidConsumed = 10f / 60f;
             targetInterval = 5f;
+            targetUnderBlocks = false;
 
             float r = range = 130f;
 
@@ -4473,7 +4537,7 @@ public class Blocks{
         }};
 
         scathe = new ItemTurret("scathe"){{
-            requirements(Category.turret, with(Items.silicon, 450, Items.graphite, 400, Items.tungsten, 500, Items.carbide, 300));
+            requirements(Category.turret, with(Items.silicon, 450, Items.graphite, 400, Items.tungsten, 500, Items.oxide, 100, Items.carbide, 200));
 
             ammo(
             Items.carbide, new BasicBulletType(0f, 1){{
@@ -4510,7 +4574,7 @@ public class Blocks{
                         deathExplosionEffect = Fx.massiveExplosion;
                         shootOnDeath = true;
                         shake = 10f;
-                        bullet = new ExplosionBulletType(640f, 65f){{
+                        bullet = new ExplosionBulletType(700f, 65f){{
                             hitColor = Pal.redLight;
                             shootEffect = new MultiEffect(Fx.massiveExplosion, Fx.scatheExplosion, Fx.scatheLight, new WaveEffect(){{
                                 lifetime = 10f;
@@ -4606,7 +4670,7 @@ public class Blocks{
 
             recoil = 0.5f;
 
-            fogRadiusMultiuplier = 0.4f;
+            fogRadiusMultiplier = 0.4f;
             coolantMultiplier = 6f;
             shootSound = Sounds.missileLaunch;
 
@@ -4616,7 +4680,7 @@ public class Blocks{
             targetUnderBlocks = false;
 
             shake = 6f;
-            ammoPerShot = 20;
+            ammoPerShot = 15;
             maxAmmo = 30;
             shootY = -1;
             outlineColor = Pal.darkOutline;
@@ -5762,7 +5826,7 @@ public class Blocks{
         }};
 
         interplanetaryAccelerator = new Accelerator("interplanetary-accelerator"){{
-            requirements(Category.effect, BuildVisibility.campaignOnly, with(Items.copper, 16000, Items.silicon, 11000, Items.thorium, 13000, Items.titanium, 12000, Items.surgeAlloy, 6000, Items.phaseFabric, 5000));
+            requirements(Category.effect, BuildVisibility.hidden, with(Items.copper, 16000, Items.silicon, 11000, Items.thorium, 13000, Items.titanium, 12000, Items.surgeAlloy, 6000, Items.phaseFabric, 5000));
             researchCostMultiplier = 0.1f;
             size = 7;
             hasPower = true;
@@ -5838,7 +5902,7 @@ public class Blocks{
         }};
 
         canvas = new CanvasBlock("canvas"){{
-            requirements(Category.logic, BuildVisibility.shown, with(Items.silicon, 30, Items.beryllium, 10));
+            requirements(Category.logic, BuildVisibility.shown, with(Items.silicon, 10, Items.beryllium, 10));
 
             canvasSize = 12;
             padding = 7f / 4f * 2f;

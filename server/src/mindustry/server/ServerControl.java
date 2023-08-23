@@ -2,6 +2,7 @@ package mindustry.server;
 
 import arc.*;
 import arc.files.*;
+import arc.func.Cons;
 import arc.struct.*;
 import arc.util.*;
 import arc.util.Timer;
@@ -35,15 +36,17 @@ import static arc.util.Log.*;
 import static mindustry.Vars.*;
 
 public class ServerControl implements ApplicationListener{
-    private static final int roundExtraTime = 12;
-    private static final int maxLogLength = 1024 * 1024 * 5;
-
     protected static String[] tags = {"&lc&fb[D]&fr", "&lb&fb[I]&fr", "&ly&fb[W]&fr", "&lr&fb[E]", ""};
     protected static DateTimeFormatter dateTime = DateTimeFormatter.ofPattern("MM-dd-yyyy HH:mm:ss"),
         autosaveDate = DateTimeFormatter.ofPattern("MM-dd-yyyy_HH-mm-ss");
 
+    /** Global instance of ServerControl, initialized when the server is created. Should never be null on a dedicated server. */
+    public static ServerControl instance;
+
     public final CommandHandler handler = new CommandHandler("");
     public final Fi logFolder = Core.settings.getDataDirectory().child("logs/");
+
+    private final Interval autosaveCount = new Interval();
 
     public Runnable serverInput = () -> {
         Scanner scan = new Scanner(System.in);
@@ -53,21 +56,54 @@ public class ServerControl implements ApplicationListener{
         }
     };
 
-    private Fi currentLogFile;
-    private boolean inGameOverWait;
-    private Task lastTask;
-    private Gamemode lastMode;
-    private @Nullable Map nextMapOverride;
-    private Interval autosaveCount = new Interval();
+    /** The file to which the logs are currently being written. */
+    public Fi currentLogFile;
 
+    /** Whether the server is currently waiting for the next map to be loaded. */
+    public boolean inGameOverWait;
+
+    /** The last gamemode loaded on this server. */
+    public Gamemode lastMode;
+
+    private Task lastTask;
     private Thread socketThread;
     private ServerSocket serverSocket;
     private PrintWriter socketOutput;
     private String suggested;
     private boolean autoPaused = false;
 
+    public Cons<GameOverEvent> gameOverListener = event -> {
+        if(state.rules.waves){
+            info("Game over! Reached wave @ with @ players online on map @.", state.wave, Groups.player.size(), Strings.capitalize(state.map.plainName()));
+        }else{
+            info("Game over! Team @ is victorious with @ players online on map @.", event.winner.name, Groups.player.size(), Strings.capitalize(state.map.plainName()));
+        }
+
+        //set the next map to be played
+        Map map = maps.getNextMap(lastMode, state.map);
+        if(map != null){
+            Call.infoMessage((state.rules.pvp
+                    ? "[accent]The " + event.winner.coloredName() + " team is victorious![]\n" : "[scarlet]Game over![]\n")
+                    + "\nNext selected map: [accent]" + map.name() + "[white]"
+                    + (map.hasTag("author") ? " by[accent] " + map.author() + "[white]" : "") + "." +
+                    "\nNew game begins in " + Config.roundExtraTime.num() + " seconds.");
+
+            state.gameOver = true;
+            Call.updateGameOver(event.winner);
+
+            info("Selected next map to be @.", map.plainName());
+
+            play(() -> world.loadMap(map, map.applyRules(lastMode)));
+        }else{
+            netServer.kickAll(KickReason.gameover);
+            state.set(State.menu);
+            net.closeServer();
+        }
+    };
+
     public ServerControl(String[] args){
         setup(args);
+        instance = this;
     }
 
     protected void setup(String[] args){
@@ -169,33 +205,8 @@ public class ServerControl implements ApplicationListener{
         }
 
         Events.on(GameOverEvent.class, event -> {
-            if(inGameOverWait) return;
-            if(state.rules.waves){
-                info("Game over! Reached wave @ with @ players online on map @.", state.wave, Groups.player.size(), Strings.capitalize(Strings.stripColors(state.map.name())));
-            }else{
-                info("Game over! Team @ is victorious with @ players online on map @.", event.winner.name, Groups.player.size(), Strings.capitalize(Strings.stripColors(state.map.name())));
-            }
-
-            //set next map to be played
-            Map map = nextMapOverride != null ? nextMapOverride : maps.getNextMap(lastMode, state.map);
-            nextMapOverride = null;
-            if(map != null){
-                Call.infoMessage((state.rules.pvp
-                ? "[accent]The " + event.winner.name + " team is victorious![]\n" : "[scarlet]Game over![]\n")
-                + "\nNext selected map:[accent] " + Strings.stripColors(map.name()) + "[]"
-                + (map.tags.containsKey("author") && !map.tags.get("author").trim().isEmpty() ? " by[accent] " + map.author() + "[white]" : "") + "." +
-                "\nNew game begins in " + roundExtraTime + " seconds.");
-
-                state.gameOver = true;
-                Call.updateGameOver(event.winner);
-
-                info("Selected next map to be @.", Strings.stripColors(map.name()));
-
-                play(true, () -> world.loadMap(map, map.applyRules(lastMode)));
-            }else{
-                netServer.kickAll(KickReason.gameover);
-                state.set(State.menu);
-                net.closeServer();
+            if(!inGameOverWait && gameOverListener != null){
+                gameOverListener.get(event);
             }
         });
 
@@ -244,7 +255,6 @@ public class ServerControl implements ApplicationListener{
         });
 
         Events.on(PlayEvent.class, e -> {
-
             try{
                 JsonValue value = JsonIO.json.fromJson(null, Core.settings.getString("globalrules"));
                 JsonIO.json.readFields(state.rules, value);
@@ -255,18 +265,32 @@ public class ServerControl implements ApplicationListener{
 
         //autosave settings once a minute
         float saveInterval = 60;
-        Timer.schedule(() -> Core.settings.forceSave(), saveInterval, saveInterval);
+        Timer.schedule(() -> {
+            netServer.admins.forceSave();
+            Core.settings.forceSave();
+        }, saveInterval, saveInterval);
 
-        if(!mods.list().isEmpty()){
-            info("@ mods loaded.", mods.list().size);
+        if(!mods.orderedMods().isEmpty()){
+            info("@ mods loaded.", mods.orderedMods().size);
+        }
+
+        int unsupported = mods.list().count(l -> !l.enabled());
+
+        if(unsupported > 0){
+            Log.err("There were errors loading @ mod(s):", unsupported);
+            for(LoadedMod mod : mods.list().select(l -> !l.enabled())){
+                Log.err("- @ &ly(" + mod.state + ")", mod.meta.name);
+            }
         }
 
         toggleSocket(Config.socketInput.bool());
 
         Events.on(ServerLoadEvent.class, e -> {
-            Thread thread = new Thread(serverInput, "Server Controls");
-            thread.setDaemon(true);
-            thread.start();
+            if(serverInput != null){
+                Thread thread = new Thread(serverInput, "Server Controls");
+                thread.setDaemon(true);
+                thread.start();
+            }
 
             info("Server loaded. Type @ for help.", "'help'");
         });
@@ -286,7 +310,6 @@ public class ServerControl implements ApplicationListener{
                 autoPaused = true;
             }
         });
-
     }
 
     protected void registerCommands(){
@@ -346,7 +369,7 @@ public class ServerControl implements ApplicationListener{
 
             Map result;
             if(arg.length > 0){
-                result = maps.all().find(map -> Strings.stripColors(map.name().replace('_', ' ')).equalsIgnoreCase(Strings.stripColors(arg[0]).replace('_', ' ')));
+                result = maps.all().find(map -> map.plainName().replace('_', ' ').equalsIgnoreCase(Strings.stripColors(arg[0]).replace('_', ' ')));
 
                 if(result == null){
                     err("No map with name '@' found.", arg[0]);
@@ -354,7 +377,7 @@ public class ServerControl implements ApplicationListener{
                 }
             }else{
                 result = maps.getShuffleMode().next(preset, state.map);
-                info("Randomized next map to be @.", result.name());
+                info("Randomized next map to be @.", result.plainName());
             }
 
             info("Loading map...");
@@ -376,7 +399,7 @@ public class ServerControl implements ApplicationListener{
                     autoPaused = true;
                 }
             }catch(MapException e){
-                err(e.map.name() + ": " + e.getMessage());
+                err("@: @", e.map.plainName(), e.getMessage());
             }
         });
 
@@ -396,7 +419,7 @@ public class ServerControl implements ApplicationListener{
                     info("Maps:");
 
                     for(Map map : all){
-                        String mapName = Strings.stripColors(map.name()).replace(' ', '_');
+                        String mapName = map.plainName().replace(' ', '_');
                         if(map.custom){
                             info("  @ (@): &fiCustom / @x@", mapName, map.file.name(), map.width, map.height);
                         }else{
@@ -427,7 +450,7 @@ public class ServerControl implements ApplicationListener{
                 info("Status: &rserver closed");
             }else{
                 info("Status:");
-                info("  Playing on map &fi@ / Wave @", Strings.capitalize(Strings.stripColors(state.map.name())), state.wave);
+                info("  Playing on map &fi@ / Wave @", Strings.capitalize(state.map.plainName()), state.wave);
 
                 if(state.rules.waves){
                     info("  @ seconds until next wave.", (int)(state.wavetime / 60));
@@ -451,7 +474,7 @@ public class ServerControl implements ApplicationListener{
             if(!mods.list().isEmpty()){
                 info("Mods:");
                 for(LoadedMod mod : mods.list()){
-                    info("  @ &fi@", mod.meta.displayName(), mod.meta.version);
+                    info("  @ &fi@ " + (mod.enabled() ? "" : " &lr(" + mod.state + ")"), mod.meta.displayName, mod.meta.version);
                 }
             }else{
                 info("No mods found.");
@@ -462,7 +485,7 @@ public class ServerControl implements ApplicationListener{
         handler.register("mod", "<name...>", "Display information about a loaded plugin.", arg -> {
             LoadedMod mod = mods.list().find(p -> p.meta.name.equalsIgnoreCase(arg[0]));
             if(mod != null){
-                info("Name: @", mod.meta.displayName());
+                info("Name: @", mod.meta.displayName);
                 info("Internal Name: @", mod.name);
                 info("Version: @", mod.meta.version);
                 info("Author: @", mod.meta.author);
@@ -717,10 +740,10 @@ public class ServerControl implements ApplicationListener{
         });
 
         handler.register("nextmap", "<mapname...>", "Set the next map to be played after a game-over. Overrides shuffling.", arg -> {
-            Map res = maps.all().find(map -> Strings.stripColors(map.name().replace('_', ' ')).equalsIgnoreCase(Strings.stripColors(arg[0]).replace('_', ' ')));
+            Map res = maps.all().find(map -> map.plainName().replace('_', ' ').equalsIgnoreCase(Strings.stripColors(arg[0]).replace('_', ' ')));
             if(res != null){
-                nextMapOverride = res;
-                info("Next map set to '@'.", Strings.stripColors(res.name()));
+                maps.setNextMapOverride(res);
+                info("Next map set to '@'.", res.plainName());
             }else{
                 err("No map '@' found.", arg[0]);
             }
@@ -873,8 +896,7 @@ public class ServerControl implements ApplicationListener{
             }else{
                 info("Players: @", Groups.player.size());
                 for(Player user : Groups.player){
-                    PlayerInfo userInfo = user.getInfo();
-                    info(" @&lm @ / ID: @ / IP: @", userInfo.admin ? "&r[A]&c" : "&b[P]&c", userInfo.plainLastName(), userInfo.id, userInfo.lastIP, userInfo.admin);
+                    info(" @&lm @ / ID: @ / IP: @", user.admin ? "&r[A]&c" : "&b[P]&c", user.plainName(), user.uuid(), user.ip());
                 }
             }
         });
@@ -1032,12 +1054,32 @@ public class ServerControl implements ApplicationListener{
         }
     }
 
+    /**
+     * @deprecated
+     * Use {@link Maps#setNextMapOverride(Map)} instead.
+     */
+    @Deprecated
     public void setNextMap(Map map){
-        nextMapOverride = map;
+        maps.setNextMapOverride(map);
     }
 
-    private void play(boolean wait, Runnable run){
+    /**
+     * Resets the world state, starts a new game.
+     * @param run What task to run to load a new world.
+     */
+    public void play(Runnable run){
+        play(true, run);
+    }
+
+    /**
+     * Resets the world state, starts a new game.
+     * @param wait Whether to wait for {@link Config#roundExtraTime} seconds before starting a new game.
+     * @param run What task to run to load a new world.
+     */
+    public void play(boolean wait, Runnable run){
         inGameOverWait = true;
+        if(lastTask != null) lastTask.cancel();
+        
         Runnable r = () -> {
             WorldReloader reloader = new WorldReloader();
 
@@ -1059,20 +1101,20 @@ public class ServerControl implements ApplicationListener{
                     try{
                         r.run();
                     }catch(MapException e){
-                        err(e.map.name() + ": " + e.getMessage());
+                        err("@: @", e.map.plainName(), e.getMessage());
                         net.closeServer();
                     }
                 }
             };
 
-            Timer.schedule(lastTask, roundExtraTime);
+            Timer.schedule(lastTask, Config.roundExtraTime.num());
         }else{
             r.run();
         }
     }
 
-    private void logToFile(String text){
-        if(currentLogFile != null && currentLogFile.length() > maxLogLength){
+    public void logToFile(String text){
+        if(currentLogFile != null && currentLogFile.length() > Config.maxLogLength.num()){
             currentLogFile.writeString("[End of log file. Date: " + dateTime.format(LocalDateTime.now()) + "]\n", true);
             currentLogFile = null;
         }
@@ -1083,7 +1125,7 @@ public class ServerControl implements ApplicationListener{
 
         if(currentLogFile == null){
             int i = 0;
-            while(logFolder.child("log-" + i + ".txt").length() >= maxLogLength){
+            while(logFolder.child("log-" + i + ".txt").length() >= Config.maxLogLength.num()){
                 i++;
             }
 
@@ -1093,7 +1135,7 @@ public class ServerControl implements ApplicationListener{
         currentLogFile.writeString(text + "\n", true);
     }
 
-    private void toggleSocket(boolean on){
+    public void toggleSocket(boolean on){
         if(on && socketThread == null){
             socketThread = new Thread(() -> {
                 try{

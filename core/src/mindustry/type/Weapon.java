@@ -10,6 +10,7 @@ import arc.math.geom.*;
 import arc.scene.ui.layout.*;
 import arc.struct.*;
 import arc.util.*;
+import mindustry.ai.types.*;
 import mindustry.annotations.Annotations.*;
 import mindustry.audio.*;
 import mindustry.content.*;
@@ -37,12 +38,14 @@ public class Weapon implements Cloneable{
     public boolean useAmmo = true;
     /** whether to create a flipped copy of this weapon upon initialization. default: true */
     public boolean mirror = true;
-    /** whether to flip the weapon's sprite when rendering */
+    /** whether to flip the weapon's sprite when rendering. internal use only - do not set! */
     public boolean flipSprite = false;
     /** whether to shoot the weapons in different arms one after another, rather than all at once; only valid when mirror = true */
     public boolean alternate = true;
     /** whether to rotate toward the target independently of unit */
     public boolean rotate = false;
+    /** Whether to show the sprite of the weapon in the database. */
+    public boolean showStatSprite = true;
     /** rotation at which this weapon starts at. TODO buggy!*/
     public float baseRotation = 0f;
     /** whether to draw the outline on top. */
@@ -61,6 +64,8 @@ public class Weapon implements Cloneable{
     public boolean autoTarget = false;
     /** whether to perform target trajectory prediction */
     public boolean predictTarget = true;
+    /** if true, this weapon is used for attack range calculations */
+    public boolean useAttackRange = true;
     /** ticks to wait in-between targets */
     public float targetInterval = 40f, targetSwitchInterval = 70f;
     /** rotation speed of weapon when rotation is enabled, in degrees/t*/
@@ -73,6 +78,8 @@ public class Weapon implements Cloneable{
     public float shake = 0f;
     /** visual weapon knockback. */
     public float recoil = 1.5f;
+    /** Number of additional counters for recoil. */
+    public int recoils = -1;
     /** time taken for weapon to return to starting position in ticks. uses reload time by default */
     public float recoilTime = -1f;
     /** power curve applied to visual recoil */
@@ -171,6 +178,10 @@ public class Weapon implements Cloneable{
         return (bullet.estimateDPS() / reload) * shoot.shots * 60f;
     }
 
+    public float shotsPerSec(){
+        return shoot.shots * 60f / reload;
+    }
+
     //TODO copy-pasted code
     public void drawOutline(Unit unit, WeaponMount mount){
         if(!outlineRegion.found()) return;
@@ -178,7 +189,7 @@ public class Weapon implements Cloneable{
         float
         rotation = unit.rotation - 90,
         realRecoil = Mathf.pow(mount.recoil, recoilPow) * recoil,
-        weaponRotation  = rotation + (rotate ? mount.rotation : 0),
+        weaponRotation  = rotation + (rotate ? mount.rotation : baseRotation),
         wx = unit.x + Angles.trnsx(rotation, x, y) + Angles.trnsx(weaponRotation, 0, -realRecoil),
         wy = unit.y + Angles.trnsy(rotation, x, y) + Angles.trnsy(weaponRotation, 0, -realRecoil);
 
@@ -213,6 +224,7 @@ public class Weapon implements Cloneable{
 
             for(int i = 0; i < parts.size; i++){
                 var part = parts.get(i);
+                DrawPart.params.setRecoil(part.recoilIndex >= 0 && mount.recoils != null ? mount.recoils[part.recoilIndex] : mount.recoil);
                 if(part.under){
                     part.draw(DrawPart.params);
                 }
@@ -240,10 +252,13 @@ public class Weapon implements Cloneable{
             Draw.color();
         }
 
+        Draw.xscl = 1f;
+
         if(parts.size > 0){
             //TODO does it need an outline?
             for(int i = 0; i < parts.size; i++){
                 var part = parts.get(i);
+                DrawPart.params.setRecoil(part.recoilIndex >= 0 && mount.recoils != null ? mount.recoils[part.recoilIndex] : mount.recoil);
                 if(!part.under){
                     part.draw(DrawPart.params);
                 }
@@ -264,9 +279,15 @@ public class Weapon implements Cloneable{
         float lastReload = mount.reload;
         mount.reload = Math.max(mount.reload - Time.delta * unit.reloadMultiplier, 0);
         mount.recoil = Mathf.approachDelta(mount.recoil, 0, unit.reloadMultiplier / recoilTime);
+        if(recoils > 0){
+            if(mount.recoils == null) mount.recoils = new float[recoils];
+            for(int i = 0; i < recoils; i++){
+                mount.recoils[i] = Mathf.approachDelta(mount.recoils[i], 0, unit.reloadMultiplier / recoilTime);
+            }
+        }
         mount.smoothReload = Mathf.lerpDelta(mount.smoothReload, mount.reload / reload, smoothReloadSpeed);
         mount.charge = mount.charging && shoot.firstShotDelay > 0 ? Mathf.approachDelta(mount.charge, 1, 1 / shoot.firstShotDelay) : 0;
-        
+
         float warmupTarget = (can && mount.shoot) || (continuous && mount.bullet != null) || mount.charging ? 1f : 0f;
         if(linearWarmup){
             mount.warmup = Mathf.approachDelta(mount.warmup, warmupTarget, shootWarmupSpeed);
@@ -375,12 +396,13 @@ public class Weapon implements Cloneable{
         //shoot if applicable
         if(mount.shoot && //must be shooting
         can && //must be able to shoot
+        !(bullet.killShooter && mount.totalShots > 0) && //if the bullet kills the shooter, you should only ever be able to shoot once
         (!useAmmo || unit.ammo > 0 || !state.rules.unitAmmo || unit.team.rules().infiniteAmmo) && //check ammo
         (!alternate || wasFlipped == flipSprite) &&
         mount.warmup >= minWarmup && //must be warmed up
         unit.vel.len() >= minShootVelocity && //check velocity requirements
         (mount.reload <= 0.0001f || (alwaysContinuous && mount.bullet == null)) && //reload has to be 0, or it has to be an always-continuous weapon
-        Angles.within(rotate ? mount.rotation : unit.rotation + baseRotation, mount.targetRotation, shootCone) //has to be within the cone
+        (alwaysShooting || Angles.within(rotate ? mount.rotation : unit.rotation + baseRotation, mount.targetRotation, shootCone)) //has to be within the cone
         ){
             shoot(unit, mount, bulletX, bulletY, shootAngle);
 
@@ -414,14 +436,16 @@ public class Weapon implements Cloneable{
             bullet.chargeEffect.at(shootX, shootY, rotation, bullet.keepVelocity || parentizeEffects ? unit : null);
         }
 
-        shoot.shoot(mount.totalShots, (xOffset, yOffset, angle, delay, mover) -> {
-            mount.totalShots++;
+        shoot.shoot(mount.barrelCounter, (xOffset, yOffset, angle, delay, mover) -> {
+            //this is incremented immediately, as it is used for total bullet creation amount detection
+            mount.totalShots ++;
+
             if(delay > 0f){
                 Time.run(delay, () -> bullet(unit, mount, xOffset, yOffset, angle, mover));
             }else{
                 bullet(unit, mount, xOffset, yOffset, angle, mover);
             }
-        });
+        }, () -> mount.barrelCounter++);
     }
 
     protected void bullet(Unit unit, WeaponMount mount, float xOffset, float yOffset, float angleOffset, Mover mover){
@@ -439,7 +463,8 @@ public class Weapon implements Cloneable{
         lifeScl = bullet.scaleLife ? Mathf.clamp(Mathf.dst(bulletX, bulletY, mount.aimX, mount.aimY) / bullet.range) : 1f,
         angle = angleOffset + shootAngle + Mathf.range(inaccuracy + bullet.inaccuracy);
 
-        mount.bullet = bullet.create(unit, unit.team, bulletX, bulletY, angle, -1f, (1f - velocityRnd) + Mathf.random(velocityRnd), lifeScl, null, mover, mount.aimX, mount.aimY);
+        Entityc shooter = unit.controller() instanceof MissileAI ai ? ai.shooter : unit; //Pass the missile's shooter down to its bullets
+        mount.bullet = bullet.create(unit, shooter, unit.team, bulletX, bulletY, angle, -1f, (1f - velocityRnd) + Mathf.random(velocityRnd), lifeScl, null, mover, mount.aimX, mount.aimY);
         handleBullet(unit, mount, mount.bullet);
 
         if(!continuous){
@@ -453,6 +478,9 @@ public class Weapon implements Cloneable{
         unit.vel.add(Tmp.v1.trns(shootAngle + 180f, bullet.recoil));
         Effect.shake(shake, shake, bulletX, bulletY);
         mount.recoil = 1f;
+        if(recoils > 0){
+            mount.recoils[mount.barrelCounter % recoils] = 1f;
+        }
         mount.heat = 1f;
     }
 

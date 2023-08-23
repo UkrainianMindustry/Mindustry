@@ -5,6 +5,7 @@ import arc.func.*;
 import arc.net.*;
 import arc.struct.*;
 import arc.util.*;
+import mindustry.game.EventType.*;
 import mindustry.gen.*;
 import mindustry.net.Packets.*;
 import mindustry.net.Streamable.*;
@@ -154,6 +155,7 @@ public class Net{
     public void connect(String ip, int port, Runnable success){
         try{
             if(!active){
+                Events.fire(new ClientServerConnectEvent(ip, port));
                 provider.connectClient(ip, port, success);
                 active = true;
                 server = false;
@@ -396,5 +398,8 @@ public class Net{
             disconnectClient();
             closeServer();
         }
+
+        /** Sets a connection filter by IP address. If the filter returns {@code false}, the connection will be closed. */
+        default void setConnectFilter(Server.ServerConnectFilter connectFilter){}
     }
 }

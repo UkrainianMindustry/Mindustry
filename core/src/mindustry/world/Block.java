@@ -18,6 +18,7 @@ import mindustry.content.*;
 import mindustry.core.*;
 import mindustry.ctype.*;
 import mindustry.entities.*;
+import mindustry.entities.bullet.*;
 import mindustry.entities.units.*;
 import mindustry.game.*;
 import mindustry.gen.*;
@@ -30,7 +31,6 @@ import mindustry.world.blocks.*;
 import mindustry.world.blocks.environment.*;
 import mindustry.world.blocks.power.*;
 import mindustry.world.consumers.*;
-import mindustry.entities.bullet.*;
 import mindustry.world.meta.*;
 
 import java.lang.reflect.*;
@@ -51,6 +51,8 @@ public class Block extends UnlockableContent implements Senseable{
     public boolean consumesPower = true;
     /** If true, this block is a generator that can produce power. */
     public boolean outputsPower = false;
+    /** If false, power nodes cannot connect to this block. */
+    public boolean connectedPower = true;
     /** If true, this block can conduct power like a cable. */
     public boolean conductivePower = false;
     /** If true, this block can output payloads; affects blending. */
@@ -106,6 +108,8 @@ public class Block extends UnlockableContent implements Senseable{
     public boolean rotate;
     /** if rotate is true and this is false, the region won't rotate when drawing */
     public boolean rotateDraw = true;
+    /** if rotate = false and this is true, rotation will be locked at 0 when placing (default); advanced use only */
+    public boolean lockRotation = true;
     /** if true, schematic flips with this block are inverted. */
     public boolean invertFlip = false;
     /** number of different variant regions to use */
@@ -166,6 +170,8 @@ public class Block extends UnlockableContent implements Senseable{
     public float baseExplosiveness = 0f;
     /** bullet that this block spawns when destroyed */
     public @Nullable BulletType destroyBullet = null;
+    /** if true, destroyBullet is spawned on the block's team instead of Derelict team */
+    public boolean destroyBulletSameTeam = false;
     /** liquid used for lighting */
     public @Nullable Liquid lightLiquid;
     /** whether cracks are drawn when this block is damaged */
@@ -413,7 +419,7 @@ public class Block extends UnlockableContent implements Senseable{
     }
 
     public void drawPotentialLinks(int x, int y){
-        if((consumesPower || outputsPower) && hasPower){
+        if((consumesPower || outputsPower) && hasPower && connectedPower){
             Tile tile = world.tile(x, y);
             if(tile != null){
                 PowerNode.getNodeLinks(tile, this, player.team(), other -> {
@@ -665,7 +671,8 @@ public class Block extends UnlockableContent implements Senseable{
     }
 
     public boolean configSenseable(){
-        return configurations.containsKey(Item.class) || configurations.containsKey(Liquid.class);
+        return configurations.containsKey(Item.class) || configurations.containsKey(Liquid.class) || configurations.containsKey(UnlockableContent.class) ||
+               configurations.containsKey(Block.class) || configurations.containsKey(UnitType.class);
     }
 
     public Object nextConfig(){
@@ -886,6 +893,11 @@ public class Block extends UnlockableContent implements Senseable{
 
     }
 
+    /** Called when building of this block begins. */
+    public void placeBegan(Tile tile, Block previous, @Nullable Unit builder){
+        placeBegan(tile, previous);
+    }
+
     /** Called right before building of this block begins. */
     public void beforePlaceBegan(Tile tile, Block previous){
 
@@ -921,6 +933,10 @@ public class Block extends UnlockableContent implements Senseable{
 
     public <T extends Consume> T findConsumer(Boolf<Consume> filter){
         return consumers.length == 0 ? (T)consumeBuilder.find(filter) : (T)Structs.find(consumers, filter);
+    }
+
+    public boolean hasConsumer(Consume cons){
+        return consumeBuilder.contains(cons);
     }
 
     public void removeConsumer(Consume cons){
@@ -979,6 +995,10 @@ public class Block extends UnlockableContent implements Senseable{
 
     public ConsumeCoolant consumeCoolant(float amount){
         return consume(new ConsumeCoolant(amount));
+    }
+
+    public ConsumeCoolant consumeCoolant(float amount, boolean allowLiquid, boolean allowGas){
+        return consume(new ConsumeCoolant(amount, allowLiquid, allowGas));
     }
 
     public <T extends Consume> T consume(T consume){
@@ -1141,6 +1161,10 @@ public class Block extends UnlockableContent implements Senseable{
         }
 
         clipSize = Math.max(clipSize, size * tilesize);
+
+        if(hasLiquids && drawLiquidLight){
+            clipSize = Math.max(size * 30f * 2f, clipSize);
+        }
 
         if(emitLight){
             clipSize = Math.max(clipSize, lightRadius * 2f);
@@ -1324,15 +1348,20 @@ public class Block extends UnlockableContent implements Senseable{
 
             editorBase = new PixmapRegion(base);
         }else{
+            if(gen[0] != null) packer.add(PageType.main, "block-" + name + "-full", Core.atlas.getPixmap(gen[0]));
             editorBase = gen[0] == null ? Core.atlas.getPixmap(fullIcon) : Core.atlas.getPixmap(gen[0]);
         }
 
         packer.add(PageType.editor, name + "-icon-editor", editorBase);
     }
 
+    public int planRotation(int rot){
+        return !rotate && lockRotation ? 0 : rot;
+    }
+
     public void flipRotation(BuildPlan req, boolean x){
         if((x == (req.rotation % 2 == 0)) != invertFlip){
-            req.rotation = Mathf.mod(req.rotation + 2, 4);
+            req.rotation = planRotation(Mathf.mod(req.rotation + 2, 4));
         }
     }
 
@@ -1341,10 +1370,11 @@ public class Block extends UnlockableContent implements Senseable{
         return switch(sensor){
             case color -> mapColor.toDoubleBits();
             case health, maxHealth -> health;
-            case size -> size * tilesize;
+            case size -> size;
             case itemCapacity -> itemCapacity;
             case liquidCapacity -> liquidCapacity;
             case powerCapacity -> consPower != null && consPower.buffered ? consPower.capacity : 0f;
+            case id -> getLogicId();
             default -> Double.NaN;
         };
     }
