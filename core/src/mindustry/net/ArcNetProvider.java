@@ -5,6 +5,7 @@ import arc.func.*;
 import arc.math.*;
 import arc.net.*;
 import arc.net.FrameworkMessage.*;
+import arc.net.Server.*;
 import arc.net.dns.*;
 import arc.struct.*;
 import arc.util.*;
@@ -33,15 +34,21 @@ public class ArcNetProvider implements NetProvider{
     final CopyOnWriteArrayList<ArcConnection> connections = new CopyOnWriteArrayList<>();
     Thread serverThread;
 
-    private static final LZ4FastDecompressor decompressor = LZ4Factory.fastestInstance().fastDecompressor();
+    private static final LZ4SafeDecompressor decompressor = LZ4Factory.fastestInstance().safeDecompressor();
     private static final LZ4Compressor compressor = LZ4Factory.fastestInstance().fastCompressor();
 
     private volatile int playerLimitCache, packetSpamLimit;
+    private Ratekeeper clientUdpErrorRate = new Ratekeeper();
 
     public ArcNetProvider(){
         ArcNet.errorHandler = e -> {
             if(Log.level == LogLevel.debug){
-                Log.debug(Strings.getStackTrace(e));
+                var finalCause = Strings.getFinalCause(e);
+
+                //"connection is closed" is a pointless annoying error that should not be logged
+                if(!"Connection is closed.".equals(finalCause.getMessage())){
+                    Log.debug(Strings.getStackTrace(e));
+                }
             }
         };
 
@@ -51,7 +58,17 @@ public class ArcNetProvider implements NetProvider{
             packetSpamLimit = Config.packetSpamLimit.num();
         });
 
-        client = new Client(8192, 16384, new PacketSerializer());
+        client = new Client(8192, 16384, new PacketSerializer()){
+            @Override
+            public void handleNetException(ArcNetException e){
+                //allow occasional UDP network errors
+                if(net.client() && e.getMessage() != null && e.getMessage().contains("UDP deserialization") && clientUdpErrorRate.allow(5000, 5)){
+                    Log.err("UDP network error", e);
+                }else{
+                    super.handleNetException(e);
+                }
+            }
+        };
         client.setDiscoveryPacket(packetSupplier);
         client.addListener(new NetListener(){
             @Override
@@ -93,7 +110,9 @@ public class ArcNetProvider implements NetProvider{
         server.setMulticast(multicastGroup, multicastPort);
         server.setDiscoveryHandler((address, handler) -> {
             ByteBuffer buffer = NetworkIO.writeServerData();
+            int length = buffer.position();
             buffer.position(0);
+            buffer.limit(length);
             handler.respond(buffer);
         });
 
@@ -105,6 +124,8 @@ public class ArcNetProvider implements NetProvider{
 
                 //kill connections above the limit to prevent spam
                 if((playerLimitCache > 0 && server.getConnections().length > playerLimitCache) || netServer.admins.isDosBlacklisted(ip)){
+                    Log.info("Closing connection @ - IP marked as a potential DOS attack.", ip);
+
                     connection.close(DcReason.closed);
                     return;
                 }
@@ -136,7 +157,7 @@ public class ArcNetProvider implements NetProvider{
 
             @Override
             public void received(Connection connection, Object object){
-                if(!(connection.getArbitraryData() instanceof ArcConnection k) || !(object instanceof Packet pack)) return;
+                if(!(connection.getArbitraryData() instanceof ArcConnection k)) return;
 
                 if(packetSpamLimit > 0 && !k.packetRate.allow(3000, packetSpamLimit)){
                     Log.warn("Blacklisting IP '@' as potential DOS attack - packet spam.", k.address);
@@ -145,11 +166,21 @@ public class ArcNetProvider implements NetProvider{
                     return;
                 }
 
+                if(!(object instanceof Packet pack)) return;
+
                 Core.app.post(() -> {
                     try{
                         net.handleServerReceived(k, pack);
                     }catch(Throwable e){
-                        Log.err(e);
+                        long time = Time.millis();
+                        //only kick due to errors if there are two within a short span of time
+                        if(Time.timeSinceMillis(k.lastErrorTime) < 2000){
+                            k.connection.close(DcReason.error);
+                            Log.err("Closing connection due to error: " + k.address + " / " + k.uuid, e);
+                        }else{
+                            k.lastErrorTime = time;
+                            Log.err("Error reading packet from connection: " + k.address + " / " + k.uuid, e);
+                        }
                     }
                 });
             }
@@ -159,6 +190,11 @@ public class ArcNetProvider implements NetProvider{
     @Override
     public void setConnectFilter(Server.ServerConnectFilter connectFilter){
         server.setConnectFilter(connectFilter);
+    }
+
+    @Override
+    public @Nullable ServerConnectFilter getConnectFilter(){
+        return server.getConnectFilter();
     }
 
     private static boolean isLocal(InetAddress addr){
@@ -173,6 +209,8 @@ public class ArcNetProvider implements NetProvider{
 
     @Override
     public void connectClient(String ip, int port, Runnable success){
+        clientUdpErrorRate.reset();
+
         Threads.daemon(() -> {
             try{
                 //just in case
@@ -198,6 +236,7 @@ public class ArcNetProvider implements NetProvider{
 
     @Override
     public void disconnectClient(){
+        clientUdpErrorRate.reset();
         client.close();
     }
 
@@ -315,6 +354,8 @@ public class ArcNetProvider implements NetProvider{
     class ArcConnection extends NetConnection{
         public final Connection connection;
 
+        long lastErrorTime;
+
         public ArcConnection(String address, Connection connection){
             super(address);
             this.connection = connection;
@@ -327,7 +368,7 @@ public class ArcNetProvider implements NetProvider{
 
         @Override
         public void sendStream(Streamable stream){
-            connection.addListener(new InputStreamSender(stream.stream, 512){
+            connection.addListener(new InputStreamSender(stream.stream, 1024){
                 int id;
 
                 @Override
@@ -353,10 +394,12 @@ public class ArcNetProvider implements NetProvider{
         @Override
         public void send(Object object, boolean reliable){
             try{
-                if(reliable){
-                    connection.sendTCP(object);
-                }else{
-                    connection.sendUDP(object);
+                if(connection.isConnected()){
+                    if(reliable){
+                        connection.sendTCP(object);
+                    }else{
+                        connection.sendUDP(object);
+                    }
                 }
             }catch(Exception e){
                 Log.err(e);
@@ -390,6 +433,9 @@ public class ArcNetProvider implements NetProvider{
 
         @Override
         public Object read(ByteBuffer byteBuffer){
+            //fixes invalid 0-length packets on some servers
+            if(byteBuffer.limit() == 0) return null;
+
             if(debug){
                 if(Time.timeSinceMillis(lastDownload) >= 1000){
                     lastDownload = Time.millis();
@@ -406,6 +452,7 @@ public class ArcNetProvider implements NetProvider{
             }else{
                 //read length int, followed by compressed lz4 data
                 Packet packet = Net.newPacket(id);
+                if(!packet.allow(net.server())) throw new RuntimeException("Invalid packet type for endpoint: " + packet.getClass());
                 var buffer = decompressBuffer.get();
                 int length = byteBuffer.getShort() & 0xffff;
                 byte compression = byteBuffer.get();
@@ -420,13 +467,14 @@ public class ArcNetProvider implements NetProvider{
                     byteBuffer.position(byteBuffer.position() + buffer.position());
                 }else{
                     //decompress otherwise
-                    int read = decompressor.decompress(byteBuffer, byteBuffer.position(), buffer, 0, length);
+                    int compressedLength = byteBuffer.limit() - byteBuffer.position();
+                    decompressor.decompress(byteBuffer, byteBuffer.position(), compressedLength, buffer, 0, length);
 
                     buffer.position(0);
                     buffer.limit(length);
                     packet.read(reads.get(), length);
                     //move buffer forward based on bytes read by decompressor
-                    byteBuffer.position(byteBuffer.position() + read);
+                    byteBuffer.position(byteBuffer.position() + compressedLength);
                 }
 
                 return packet;
@@ -446,7 +494,7 @@ public class ArcNetProvider implements NetProvider{
                 byteBuffer.put((byte)-2); //code for framework message
                 writeFramework(byteBuffer, msg);
             }else{
-                if(!(o instanceof Packet pack)) throw new RuntimeException("All sent objects must implement be Packets! Class: " + o.getClass());
+                if(!(o instanceof Packet pack)) throw new RuntimeException("All sent objects must extend Packet! Class: " + o.getClass());
                 byte id = Net.getPacketId(pack);
                 byteBuffer.put(id);
 

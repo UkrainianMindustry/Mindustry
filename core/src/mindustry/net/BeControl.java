@@ -31,10 +31,14 @@ public class BeControl{
 
     /** @return whether this is a bleeding edge build. */
     public boolean active(){
-        return Version.type.equals("bleeding-edge");
+        return Version.type.equals("bleeding-edge") && !steam;
     }
 
     public BeControl(){
+
+    }
+
+    public void init(){
         if(active()){
             Timer.schedule(() -> {
                 if((Vars.clientLoaded || headless) && checkUpdates && !mobile){
@@ -47,7 +51,7 @@ public class BeControl{
             try{
                 Fi dest = Fi.get(OS.prop("becopy"));
                 Fi self = Fi.get(BeControl.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath());
-                
+
                 for(Fi file : self.parent().findAll(f -> !f.equals(self))) file.delete();
 
                 self.copyTo(dest);

@@ -1,5 +1,6 @@
 package mindustry.world.blocks.distribution;
 
+import arc.func.*;
 import arc.graphics.*;
 import arc.graphics.g2d.*;
 import arc.math.*;
@@ -21,12 +22,10 @@ import mindustry.world.meta.*;
 import static mindustry.Vars.*;
 
 public class ItemBridge extends Block{
-    private static BuildPlan otherReq;
-
     public final int timerCheckMoved = timers ++;
 
     public int range;
-    public float transportTime = 2f;
+    public float transportTime;
     public @Load("@-end") TextureRegion endRegion;
     public @Load("@-bridge") TextureRegion bridgeRegion;
     public @Load("@-arrow") TextureRegion arrowRegion;
@@ -53,10 +52,13 @@ public class ItemBridge extends Block{
         unloadable = false;
         group = BlockGroup.transportation;
         noUpdateDisabled = true;
+        allowDiagonal = false;
         copyConfig = false;
         //disabled as to not be annoying
         allowConfigInventory = false;
+        ignoreResizeConfig = true;
         priority = TargetPriority.transport;
+        delayLandingConfig = true;
 
         //point2 config is relative
         config(Point2.class, (ItemBridgeBuild tile, Point2 i) -> tile.link = Point2.pack(i.x + tile.tileX(), i.y + tile.tileY()));
@@ -65,16 +67,28 @@ public class ItemBridge extends Block{
     }
 
     @Override
-    public void drawPlanConfigTop(BuildPlan plan, Eachable<BuildPlan> list){
-        otherReq = null;
-        list.each(other -> {
-            if(other.block == this && plan != other && plan.config instanceof Point2 p && p.equals(other.x - plan.x, other.y - plan.y)){
-                otherReq = other;
-            }
-        });
+    public void setStats() {
+        super.setStats();
+        if(transportTime != 0f){
+            stats.add(Stat.itemsMoved, 60f / transportTime, StatUnit.itemsSecond);
+        }
+    }
 
-        if(otherReq != null){
-            drawBridge(plan, otherReq.drawx(), otherReq.drawy(), 0);
+    private static int currentFindX, currentFindY;
+    private static BuildPlan currentPlan;
+    private static final Boolf<BuildPlan> planFinder = other -> other.block == currentPlan.block && currentPlan != other && currentFindX == other.x && currentFindY == other.y;
+
+    @Override
+    public void drawPlanConfigTop(BuildPlan plan, Eachable<BuildPlan> list){
+        if(plan.config instanceof Point2 p && (Math.abs(p.x) <= range && Math.abs(p.y) <= range && (p.x == 0 || p.y == 0))){
+            currentFindX = plan.x + p.x;
+            currentFindY = plan.y + p.y;
+            currentPlan = plan;
+            var otherReq = findPlan(list, currentFindX, currentFindY, planFinder);
+
+            if(otherReq != null){
+                drawBridge(plan, otherReq.drawx(), otherReq.drawy(), 0);
+            }
         }
     }
 
@@ -237,13 +251,15 @@ public class ItemBridge extends Block{
             Lines.stroke(2.5f);
             Lines.line(tx + Tmp.v2.x, ty + Tmp.v2.y, ox - Tmp.v2.x, oy - Tmp.v2.y);
 
+            float color = (linked ? Pal.place : Pal.accent).toFloatBits();
+
             //draw foreground colors
-            Draw.color(linked ? Pal.place : Pal.accent);
+            Draw.color(color);
             Lines.stroke(1f);
             Lines.line(tx + Tmp.v2.x, ty + Tmp.v2.y, ox - Tmp.v2.x, oy - Tmp.v2.y);
 
             Lines.square(ox, oy, 2f, 45f);
-            Draw.mixcol(Draw.getColor(), 1f);
+            Draw.mixcol(color);
             Draw.color();
             Draw.rect(arrowRegion, x, y, rel * 90);
             Draw.mixcol();
@@ -418,13 +434,22 @@ public class ItemBridge extends Block{
                 checkAccept(source, world.tile(link));
         }
 
-        protected boolean checkAccept(Building source, Tile other){
+        protected boolean checkAccept(Building source, Tile link){
             if(tile == null || linked(source)) return true;
 
-            if(linkValid(tile, other)){
-                int rel = relativeTo(other);
+            if(linkValid(tile, link)){
+                int rel = relativeTo(link);
                 var facing = Edges.getFacingEdge(source, this);
                 int rel2 = facing == null ? -1 : relativeTo(facing);
+
+                //this is a bug, but it is kept for compatibility, see: https://github.com/Anuken/Mindustry/issues/9257#issuecomment-1801998747
+                /*
+                for(int j = 0; j < incoming.size; j++){
+                    int v = incoming.items[j];
+                    if(relativeTo(Point2.x(v), Point2.y(v)) == rel2){
+                        return false;
+                    }
+                }*/
 
                 return rel != rel2;
             }

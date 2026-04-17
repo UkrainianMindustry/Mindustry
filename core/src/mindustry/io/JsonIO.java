@@ -42,7 +42,25 @@ public class JsonIO{
             if(object instanceof MappableContent c) return c.name;
             return super.convertToString(object);
         }
+
+        @Override
+        protected <T> Class<T> resolveClass(String className){
+            Class<T> result = super.resolveClass(className);
+            if(Serializable.class.isAssignableFrom(result) || JsonSerializable.class.isAssignableFrom(result)){
+                return result;
+            }
+            throw new SerializationException("Class deserialization not allowed: " + result);
+        }
     };
+
+    public static void writeBytes(Object value, Class<?> elementType, DataOutputStream output){
+        json.setWriter(new UBJsonWriter(output));
+        json.writeValue(value, value == null ? null : value.getClass(), elementType);
+    }
+
+    public static <T> T readBytes(Class<T> type, Class<?> elementType, DataInputStream input) throws IOException{
+        return json.readValue(type, elementType, new UBJsonReader().parseWihoutClosing(input));
+    }
 
     public static String write(Object object){
         return json.toJson(object, object.getClass());
@@ -252,15 +270,8 @@ public class JsonIO{
             public UnlockableContent read(Json json, JsonValue jsonData, Class type){
                 if(jsonData.isNull()) return null;
                 String str = jsonData.asString();
-                Item item = Vars.content.item(str);
-                Liquid liquid = Vars.content.liquid(str);
-                Block block = Vars.content.block(str);
-                UnitType unit = Vars.content.unit(str);
-                return
-                    item != null ? item :
-                    liquid != null ? liquid :
-                    block != null ? block :
-                    unit;
+                var map = Vars.content.byName(str);
+                return map instanceof UnlockableContent u ? u : null;
             }
         });
 
@@ -306,6 +317,7 @@ public class JsonIO{
                     }
 
                     exec.all.add(obj);
+                    obj.validate();
                 }
 
                 // Second iteration to map the parents.

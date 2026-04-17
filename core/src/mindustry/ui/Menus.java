@@ -31,6 +31,7 @@ public class Menus{
     @Remote(variants = Variant.both)
     public static void menu(int menuId, String title, String message, String[][] options){
         if(title == null) title = "";
+        if(message == null) message = "";
         if(options == null) options = new String[0][0];
 
         ui.showMenu(title, message, options, (option) -> Call.menuChoose(player, menuId, option));
@@ -39,6 +40,7 @@ public class Menus{
     @Remote(variants = Variant.both)
     public static void followUpMenu(int menuId, String title, String message, String[][] options){
         if(title == null) title = "";
+        if(message == null) message = "";
         if(options == null) options = new String[0][0];
 
         ui.showFollowUpMenu(menuId, title, message, options, (option) -> Call.menuChoose(player, menuId, option));
@@ -61,9 +63,16 @@ public class Menus{
 
     @Remote(variants = Variant.both)
     public static void textInput(int textInputId, String title, String message, int textLength, String def, boolean numeric){
-        if(title == null) title = "";
+        textInput(textInputId, title, message, textLength, def, numeric, false);
+    }
 
-        ui.showTextInput(title, message, textLength, def, numeric, (text) -> {
+    @Remote(variants = Variant.both)
+    public static void textInput(int textInputId, String title, String message, int textLength, String def, boolean numeric, boolean allowEmpty){
+        if(title == null) title = "";
+        if(message == null) message = "";
+        if(def == null) def = "";
+
+        ui.showTextInput(title, message, textLength, def, numeric, allowEmpty, (text) -> {
             Call.textInputResult(player, textInputId, text);
         }, () -> {
             Call.textInputResult(player, textInputId, null);
@@ -113,29 +122,47 @@ public class Menus{
     }
 
     @Remote(variants = Variant.both, unreliable = true)
-    public static void infoPopup(String message, float duration, int align, int top, int left, int bottom, int right){
+    public static void infoPopup(@Nullable String message, @Nullable String id, float duration, int align, int top, int left, int bottom, int right){
         if(message == null) return;
 
-        ui.showInfoPopup(message, duration, align, top, left, bottom, right);
+        ui.showInfoPopup(message, id, duration, align, top, left, bottom, right);
+    }
+
+    @Remote(variants = Variant.both)
+    public static void infoPopupReliable(@Nullable String message, @Nullable String id, float duration, int align, int top, int left, int bottom, int right){
+        infoPopup(message, id, duration, align, top, left, bottom, right);
     }
 
     @Remote(variants = Variant.both, unreliable = true)
-    public static void label(String message, float duration, float worldx, float worldy){
-        if(message == null) return;
-
-        ui.showLabel(message, duration, worldx, worldy);
+    public static void infoPopup(@Nullable String message, float duration, int align, int top, int left, int bottom, int right){
+        infoPopup(message, null, duration, align, top, left, bottom, right);
     }
 
     @Remote(variants = Variant.both)
-    public static void infoPopupReliable(String message, float duration, int align, int top, int left, int bottom, int right){
+    public static void infoPopupReliable(@Nullable String message, float duration, int align, int top, int left, int bottom, int right){
+        infoPopup(message, duration, align, top, left, bottom, right);
+    }
+
+    @Remote(variants = Variant.both, unreliable = true)
+    public static void label(@Nullable String message, int id, float duration, float worldx, float worldy){
         if(message == null) return;
 
-        ui.showInfoPopup(message, duration, align, top, left, bottom, right);
+        ui.showLabel(message, id, duration, worldx, worldy);
     }
 
     @Remote(variants = Variant.both)
-    public static void labelReliable(String message, float duration, float worldx, float worldy){
-        label(message, duration, worldx, worldy);
+    public static void labelReliable(@Nullable String message, int id, float duration, float worldx, float worldy){
+        label(message, id, duration, worldx, worldy);
+    }
+
+    @Remote(variants = Variant.both, unreliable = true)
+    public static void label(@Nullable String message, float duration, float worldx, float worldy){
+        label(message, -1, duration, worldx, worldy);
+    }
+
+    @Remote(variants = Variant.both)
+    public static void labelReliable(@Nullable String message, float duration, float worldx, float worldy){
+        label(message, -1, duration, worldx, worldy);
     }
 
     @Remote(variants = Variant.both)
@@ -157,6 +184,13 @@ public class Menus{
         if(uri == null) return;
 
         ui.showConfirm(Core.bundle.format("linkopen", uri), () -> Core.app.openURI(uri));
+    }
+
+    @Remote(variants = Variant.both)
+    public static void copyToClipboard(String text){
+        if(text == null) return;
+
+        ui.showConfirm(Core.bundle.format("clipboardcopy", text), () -> Core.app.setClipboardText(text));
     }
 
     //internal use only

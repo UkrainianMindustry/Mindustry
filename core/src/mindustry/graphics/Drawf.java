@@ -5,10 +5,12 @@ import arc.graphics.*;
 import arc.graphics.g2d.*;
 import arc.math.*;
 import arc.math.geom.*;
+import arc.scene.ui.layout.*;
 import arc.struct.*;
 import arc.util.*;
 import mindustry.ctype.*;
 import mindustry.gen.*;
+import mindustry.ui.*;
 import mindustry.world.*;
 
 import java.util.*;
@@ -19,11 +21,48 @@ public class Drawf{
     private static final Vec2[] vecs = new Vec2[]{new Vec2(), new Vec2(), new Vec2(), new Vec2()};
     private static final FloatSeq points = new FloatSeq();
 
+    public static void text(String text, float x, float y, Color color){
+        text(text, x, y, 0f, color, 1f, Align.center);
+    }
+
+    public static void text(String text, float x, float y, Color color, float scale){
+        text(text, x, y, 0f, color, scale, Align.center);
+    }
+
+    public static void text(String text, float x, float y, Color color, float scale, int align){
+        text(text, x, y, 0f, color, scale, align);
+    }
+
+    public static void text(String text, float x, float y, float rotation, Color color, float scale, int align){
+        Font font = Fonts.outline;
+        boolean ints = font.usesIntegerPositions();
+        font.setUseIntegerPositions(false);
+        font.getData().setScale(0.25f / Scl.scl(1f) * scale);
+        font.setColor(color);
+        font.getCache().clear();
+        GlyphLayout layout = font.getCache().addText(text, x, y, 0f, align, false);
+        if(rotation != 0){
+            float verticalFraction = (align & Align.bottom) != 0 ? 1f : (align & Align.top) != 0 ? 0f: 0.5f;
+            font.getCache().setRotation(rotation, x, y - layout.height * verticalFraction);
+        }
+        if(color.a < 1f){
+            font.getCache().setAlphas(color.a);
+        }
+        font.getCache().draw();
+        font.getData().setScale(1f);
+        font.setColor(Color.white);
+        font.setUseIntegerPositions(ints);
+    }
+
     /** Bleeds a mod pixmap if linear filtering is enabled. */
     public static void checkBleed(Pixmap pixmap){
         if(Core.settings.getBool("linear", true)){
             Pixmaps.bleed(pixmap);
         }
+    }
+
+    public static void underwater(Runnable run){
+        renderer.blocks.floor.drawUnderwater(run);
     }
 
     //TODO offset unused
@@ -130,6 +169,17 @@ public class Drawf{
         additive(region, color, 1f, x, y, rotation, layer);
     }
 
+    public static void additive(TextureRegion region, Color color, float alpha, float x, float y, float width, float height, float layer){
+        float pz = Draw.z();
+        Draw.z(layer);
+        Draw.color(color, alpha * color.a);
+        Draw.blend(Blending.additive);
+        Draw.rect(region, x, y, width, height, 0f);
+        Draw.blend();
+        Draw.color();
+        Draw.z(pz);
+    }
+
     public static void additive(TextureRegion region, Color color, float alpha, float x, float y, float rotation, float layer){
         float pz = Draw.z();
         Draw.z(layer);
@@ -141,11 +191,29 @@ public class Drawf{
         Draw.z(pz);
     }
 
-    public static void limitLine(Position start, Position dest, float len1, float len2){
+    public static void additive(TextureRegion region, Color color, float alpha, float x, float y, float rotation, float layer, float originX, float originY){
+        float pz = Draw.z(), w = region.width * region.scl() * Draw.xscl, h = region.height * region.scl() * Draw.yscl;
+        Draw.z(layer);
+        Draw.color(color, alpha * color.a);
+        Draw.blend(Blending.additive);
+        Draw.rect(region, x, y, w, h, w / 2f + originX * region.scl() * Draw.xscl, h / 2f + originY * region.scl() * Draw.yscl, rotation);
+        Draw.blend();
+        Draw.color();
+        Draw.z(pz);
+    }
+
+    public static void limitLine(Position start, Position dest, float len1, float len2, Color color){
+        if(start.within(dest, len1 + len2)){
+            return;
+        }
         Tmp.v1.set(dest).sub(start).setLength(len1);
         Tmp.v2.set(Tmp.v1).scl(-1f).setLength(len2);
 
-        Drawf.line(Pal.accent, start.getX() + Tmp.v1.x, start.getY() + Tmp.v1.y, dest.getX() + Tmp.v2.x, dest.getY() + Tmp.v2.y);
+        Drawf.line(color, start.getX() + Tmp.v1.x, start.getY() + Tmp.v1.y, dest.getX() + Tmp.v2.x, dest.getY() + Tmp.v2.y);
+    }
+
+    public static void limitLine(Position start, Position dest, float len1, float len2){
+        limitLine(start, dest, len1, len2, Pal.accent);
     }
 
     public static void dashLineDst(Color color, float x, float y, float x2, float y2){
@@ -223,7 +291,7 @@ public class Drawf{
     /** Sets Draw.z to the text layer, and returns the previous layer. */
     public static float text(){
         float z = Draw.z();
-        if(renderer.pixelator.enabled()){
+        if(renderer.pixelate){
             Draw.z(Layer.endPixeled);
         }
 
@@ -260,7 +328,7 @@ public class Drawf{
     }
 
     public static void selected(Building tile, Color color){
-        selected(tile.tile(), color);
+        selected(tile.tile, color);
     }
 
     public static void selected(Tile tile, Color color){
@@ -306,7 +374,7 @@ public class Drawf{
         Draw.rect(region, x, y);
         Draw.color();
     }
-    
+
     public static void shadow(TextureRegion region, float x, float y, float width, float height, float rotation){
         Draw.color(Pal.shadow);
         Draw.rect(region, x, y, width, height, rotation);
@@ -354,10 +422,48 @@ public class Drawf{
     }
 
     public static void square(float x, float y, float radius, float rotation, Color color){
-        Lines.stroke(3f, Pal.gray);
-        Lines.square(x, y, radius + 1f, rotation);
+        square(x, y, radius, rotation, color, Pal.gray.write(Tmp.c3).a(color.a));
+    }
+
+    public static void square(float x, float y, float radius, float rotation, Color color, Color bgColor){
+        square(x, y, radius, rotation, color, bgColor, 1f);
+    }
+
+    public static void square(float x, float y, float radius, float rotation, Color color, Color bgColor, float scaling){
+        Lines.stroke(3f * scaling, bgColor);
+        Lines.square(x, y, radius + 1f * scaling, rotation);
+        Lines.stroke(1f * scaling, color);
+        Lines.square(x, y, radius + 1f * scaling, rotation);
+        Draw.reset();
+    }
+
+    public static void cross(float x, float y, float radius, Color color){
+        Lines.stroke(3f, Pal.gray.write(Tmp.c3).a(color.a));
+        Lines.lineAngleCenter(x, y, 45f, radius + 1f);
+        Lines.lineAngleCenter(x, y, 135f, radius + 1f);
         Lines.stroke(1f, color);
-        Lines.square(x, y, radius + 1f, rotation);
+        Lines.lineAngleCenter(x, y, 45f, radius + 1f);
+        Lines.lineAngleCenter(x, y, 135f, radius + 1f);
+        Draw.reset();
+    }
+
+    public static void poly(float x, float y, int sides, float radius, float rotation, Color color){
+        Lines.stroke(3f, Pal.gray);
+        Lines.poly(x, y, sides, radius + 1f, rotation);
+        Lines.stroke(1f, color);
+        Lines.poly(x, y, sides, radius + 1f, rotation);
+        Draw.reset();
+    }
+
+    public static void fillPoly(float x, float y, int sides, float radius, float rotation, Color color){
+        fillPoly(x, y, sides, radius, rotation, color, Pal.gray, 1f);
+    }
+
+    public static void fillPoly(float x, float y, int sides, float radius, float rotation, Color color, Color bgColor, float scl){
+        Draw.color(bgColor, color.a);
+        Fill.poly(x, y, sides, radius + 2f*scl, rotation);
+        Draw.color(color);
+        Fill.poly(x, y, sides, radius, rotation);
         Draw.reset();
     }
 
@@ -403,6 +509,10 @@ public class Drawf{
     }
 
     public static void laser(TextureRegion line, TextureRegion start, TextureRegion end, float x, float y, float x2, float y2, float scale){
+        laser(line, start, end, x, y, x2, y2, scale, true);
+    }
+
+    public static void laser(TextureRegion line, TextureRegion start, TextureRegion end, float x, float y, float x2, float y2, float scale, boolean light){
         float scl = 8f * scale * Draw.scl, rot = Mathf.angle(x2 - x, y2 - y);
         float vx = Mathf.cosDeg(rot) * scl, vy = Mathf.sinDeg(rot) * scl;
 
@@ -413,7 +523,7 @@ public class Drawf{
         Lines.line(line, x + vx, y + vy, x2 - vx, y2 - vy, false);
         Lines.stroke(1f);
 
-        light(x, y, x2, y2);
+        if(light) light(x, y, x2, y2);
     }
 
     public static void tri(float x, float y, float width, float length, float rotation){
@@ -436,7 +546,7 @@ public class Drawf{
     public static void construct(float x, float y, TextureRegion region, float rotation, float progress, float alpha, float time){
         construct(x, y, region, Pal.accent, rotation, progress, alpha, time);
     }
-    
+
     public static void construct(float x, float y, TextureRegion region, Color color, float rotation, float progress, float alpha, float time){
         Shaders.build.region = region;
         Shaders.build.progress = progress;
@@ -458,7 +568,7 @@ public class Drawf{
     public static void construct(Building t, TextureRegion region, Color color, float rotation, float progress, float alpha, float time){
         construct(t, region, color, rotation, progress, alpha, time, t.block.size * tilesize - 4f);
     }
-        
+
     public static void construct(Building t, TextureRegion region, Color color, float rotation, float progress, float alpha, float time, float size){
         Shaders.build.region = region;
         Shaders.build.progress = progress;
@@ -477,10 +587,10 @@ public class Drawf{
 
         Draw.reset();
     }
-    
+
     /** Draws a sprite that should be light-wise correct, when rotated. Provided sprite must be symmetrical in shape. */
     public static void spinSprite(TextureRegion region, float x, float y, float r){
-        float a = Draw.getColor().a;
+        float a = Draw.getColorAlpha();
         r = Mathf.mod(r, 90f);
         Draw.rect(region, x, y, r);
         Draw.alpha(r / 90f*a);

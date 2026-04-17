@@ -1,13 +1,18 @@
 package mindustry.type.weapons;
 
+import arc.*;
 import arc.graphics.*;
 import arc.math.*;
 import arc.math.geom.*;
+import arc.scene.ui.layout.*;
+import arc.util.*;
 import mindustry.content.*;
 import mindustry.entities.*;
 import mindustry.entities.units.*;
+import mindustry.game.*;
 import mindustry.gen.*;
 import mindustry.type.*;
+import mindustry.world.meta.*;
 
 import static mindustry.Vars.*;
 
@@ -35,6 +40,13 @@ public class PointDefenseWeapon extends Weapon{
         rotate = true;
         useAmmo = false;
         useAttackRange = false;
+        targetInterval = 10f;
+    }
+
+    @Override 
+    public void addStats(UnitType u, Table t){
+        t.add(Core.bundle.format("weapon.pointdefense"));
+        super.addStats(u, t);
     }
 
     @Override

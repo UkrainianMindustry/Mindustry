@@ -5,15 +5,16 @@ import arc.audio.*;
 import arc.graphics.*;
 import arc.graphics.g2d.*;
 import arc.math.*;
+import arc.scene.ui.layout.*;
 import arc.struct.*;
 import arc.util.*;
-import mindustry.*;
 import mindustry.content.*;
 import mindustry.entities.*;
 import mindustry.game.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
 import mindustry.type.*;
+import mindustry.world.meta.*;
 
 import static mindustry.Vars.*;
 
@@ -23,7 +24,7 @@ public class EnergyFieldAbility extends Ability{
     public float damage = 1, reload = 100, range = 60;
     public Effect healEffect = Fx.heal, hitEffect = Fx.hitLaserBlast, damageEffect = Fx.chainLightning;
     public StatusEffect status = StatusEffects.electrified;
-    public Sound shootSound = Sounds.spark;
+    public Sound shootSound = Sounds.shootEnergyField;
     public float statusDuration = 60f * 6f;
     public float x, y;
     public boolean targetGround = true, targetAir = true, hitBuildings = true, hitUnits = true;
@@ -31,6 +32,7 @@ public class EnergyFieldAbility extends Ability{
     public float healPercent = 3f;
     /** Multiplies healing to units of the same type by this amount. */
     public float sameTypeHealMult = 1f;
+    public boolean displayHeal = true;
 
     public float layer = Layer.bullet - 0.001f, blinkScl = 20f, blinkSize = 0.1f;
     public float effectRadius = 5f, sectorRad = 0.14f, rotateSpeed = 0.5f;
@@ -50,8 +52,31 @@ public class EnergyFieldAbility extends Ability{
     }
 
     @Override
-    public String localized(){
-        return Core.bundle.format("ability.energyfield", damage, range / Vars.tilesize, maxTargets);
+    public void addStats(Table t){
+        if(displayHeal){
+            t.add(Core.bundle.get(getBundle() + ".healdescription")).wrap().width(descriptionWidth);
+        }else{
+            t.add(Core.bundle.get(getBundle() + ".description")).wrap().width(descriptionWidth);
+        }
+        t.row();
+
+        t.add(Core.bundle.format("bullet.range", Strings.autoFixed(range / tilesize, 2)));
+        t.row();
+        t.add(abilityStat("firingrate", Strings.autoFixed(60f / reload, 2)));
+        t.row();
+        t.add(abilityStat("maxtargets", maxTargets));
+        t.row();
+        t.add(Core.bundle.format("bullet.damage", damage));
+        if(status != StatusEffects.none){
+            t.row();
+            t.add((status.hasEmoji() ? status.emoji() : "") + "[stat]" + status.localizedName).with(l -> StatValues.withTooltip(l, status));
+        }
+        if(displayHeal){
+            t.row();
+            t.add(Core.bundle.format("bullet.healpercent", Strings.autoFixed(healPercent, 2)));
+            t.row();
+            t.add(abilityStat("sametypehealmultiplier", (sameTypeHealMult < 1f ? "[negstat]" : "") + Strings.autoFixed(sameTypeHealMult * 100f, 2)));
+        }
     }
 
     @Override
@@ -111,7 +136,7 @@ public class EnergyFieldAbility extends Ability{
 
             if(hitBuildings && targetGround){
                 Units.nearbyBuildings(rx, ry, range, b -> {
-                    if((b.team != Team.derelict || state.rules.coreCapture) && (b.team != unit.team || b.damaged())){
+                    if((b.team != Team.derelict || state.rules.coreCapture) && ((b.team != unit.team && b.block.targetable) || b.damaged()) && !b.block.privileged){
                         all.add(b);
                     }
                 });
@@ -119,6 +144,8 @@ public class EnergyFieldAbility extends Ability{
 
             all.sort(h -> h.dst2(rx, ry));
             int len = Math.min(all.size, maxTargets);
+            float scaledDamage = damage * state.rules.unitDamage(unit.team) * unit.damageMultiplier;
+
             for(int i = 0; i < len; i++){
                 Healthc other = all.get(i);
 
@@ -144,9 +171,9 @@ public class EnergyFieldAbility extends Ability{
                 }else{
                     anyNearby = true;
                     if(other instanceof Building b){
-                        b.damage(unit.team, damage * state.rules.unitDamage(unit.team));
+                        b.damage(unit.team, scaledDamage);
                     }else{
-                        other.damage(damage * state.rules.unitDamage(unit.team));
+                        other.damage(scaledDamage);
                     }
                     if(other instanceof Statusc s){
                         s.apply(status, statusDuration);
@@ -158,7 +185,7 @@ public class EnergyFieldAbility extends Ability{
             }
 
             if(anyNearby){
-                shootSound.at(unit);
+                shootSound.at(unit, 1f + Mathf.range(0.1f), 1f);
 
                 if(useAmmo && state.rules.unitAmmo){
                     unit.ammo --;

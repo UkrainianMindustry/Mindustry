@@ -28,6 +28,7 @@ public class MenuFragment{
     private Button currentMenu;
     private MenuRenderer renderer;
     private Seq<MenuButton> customButtons = new Seq<>();
+    public Seq<MenuButton> desktopButtons = null;
 
     public void build(Group parent){
         renderer = new MenuRenderer();
@@ -61,20 +62,38 @@ public class MenuFragment{
 
         parent.fill(c -> c.bottom().right().button(Icon.discord, new ImageButtonStyle(){{
             up = discordBanner;
-        }}, ui.discord::show).marginTop(9f).marginLeft(10f).tooltip("@discord").size(84, 45).name("discord"));
+        }}, ui.discord::show).visible(() -> !ui.consolefrag.shown()).marginTop(9f).marginLeft(10f).tooltip("@discord").size(84, 45).name("discord"));
 
         //info icon
         if(mobile){
-            parent.fill(c -> c.bottom().left().button("", new TextButtonStyle(){{
-                font = Fonts.def;
-                fontColor = Color.white;
-                up = infoBanner;
-            }}, ui.about::show).size(84, 45).name("info"));
-
+            //left/right gutter areas
             parent.fill((x, y, w, h) -> {
-                if(Core.scene.marginBottom > 0){
-                    Tex.paneTop.draw(0, 0, Core.graphics.getWidth(), Core.scene.marginBottom);
+                x = 0f;
+                y = 0f;
+                w = Core.graphics.getWidth();
+                h = Core.graphics.getHeight();
+                if(Core.scene.marginLeft > 0){
+                    paneRight.draw(x, y, Core.scene.marginLeft, h);
                 }
+
+                if(Core.scene.marginRight > 0){
+                    paneLeft.draw(x + w - Core.scene.marginRight, y, Core.scene.marginRight, h);
+                }
+
+                if(Core.scene.marginBottom > 0){
+                    Tex.paneTop.draw(Core.scene.marginLeft, 0, Core.graphics.getWidth() - Core.scene.marginRight - Core.scene.marginLeft, Core.scene.marginBottom);
+                }
+            });
+
+            parent.fill(c -> {
+                c.bottom().left();
+                c.button(Icon.terminal, () -> ui.consolefrag.toggleMobile()).visible(() -> !ui.consolefrag.shown() && Core.settings.getBool("console")).pad(4f).size(60f).left().row();
+
+                c.button("", new TextButtonStyle(){{
+                    font = Fonts.def;
+                    fontColor = Color.white;
+                    up = infoBanner;
+                }}, ui.about::show).size(84, 45).visible(() -> !ui.consolefrag.shown()).name("info");
             });
         }else if(becontrol.active()){
             parent.fill(c -> c.bottom().right().button("@be.check", Icon.refresh, () -> {
@@ -187,22 +206,26 @@ public class MenuFragment{
             t.defaults().width(width).height(70f);
             t.name = "buttons";
 
-            buttons(t,
-                new MenuButton("@play", Icon.play,
-                    new MenuButton("@campaign", Icon.play, () -> checkPlay(ui.planet::show)),
-                    new MenuButton("@joingame", Icon.add, () -> checkPlay(ui.join::show)),
-                    new MenuButton("@customgame", Icon.terrain, () -> checkPlay(ui.custom::show)),
-                    new MenuButton("@loadgame", Icon.download, () -> checkPlay(ui.load::show))
-                ),
-                new MenuButton("@database.button", Icon.menu,
-                    new MenuButton("@schematics", Icon.paste, ui.schematics::show),
-                    new MenuButton("@database", Icon.book, ui.database::show),
-                    new MenuButton("@about.button", Icon.info, ui.about::show)
-                ),
-                new MenuButton("@editor", Icon.terrain, () -> checkPlay(ui.maps::show)), steam ? new MenuButton("@workshop", Icon.steam, platform::openWorkshop) : null,
-                new MenuButton("@mods", Icon.book, ui.mods::show),
-                new MenuButton("@settings", Icon.settings, ui.settings::show)
-            );
+            if(desktopButtons == null){
+                desktopButtons = Seq.with(
+                    new MenuButton("@play", Icon.play,
+                        new MenuButton("@campaign", Icon.play, () -> checkPlay(ui.planet::show)),
+                        new MenuButton("@joingame", Icon.add, () -> checkPlay(ui.join::show)),
+                        new MenuButton("@customgame", Icon.terrain, () -> checkPlay(ui.custom::show)),
+                        new MenuButton("@loadgame", Icon.download, () -> checkPlay(ui.load::show))
+                    ),
+                    new MenuButton("@database.button", Icon.menu,
+                        new MenuButton("@schematics", Icon.paste, ui.schematics::show),
+                        new MenuButton("@database", Icon.book, ui.database::show),
+                        new MenuButton("@about.button", Icon.info, ui.about::show)
+                    ),
+                    new MenuButton("@editor", Icon.terrain, () -> checkPlay(ui.maps::show)), steam ? new MenuButton("@workshop", Icon.steam, platform::openWorkshop) : null,
+                    new MenuButton("@mods", Icon.book, ui.mods::show),
+                    new MenuButton("@settings", Icon.settings, ui.settings::show)
+                );
+            }
+
+            buttons(t, desktopButtons.toArray(MenuButton.class));
             buttons(t, customButtons.toArray(MenuButton.class));
             buttons(t, new MenuButton("@quit", Icon.exit, Core.app::exit));
         }).width(width).growY();
@@ -250,14 +273,14 @@ public class MenuFragment{
                     currentMenu = null;
                     fadeOutMenu();
                 }else{
-                    if(b.submenu != null){
+                    if(b.submenu != null && b.submenu.any()){
                         currentMenu = out[0];
                         submenu.clearChildren();
                         fadeInMenu();
                         //correctly offset the button
                         submenu.add().height((Core.graphics.getHeight() - Core.scene.marginTop - Core.scene.marginBottom - out[0].getY(Align.topLeft)) / Scl.scl(1f));
                         submenu.row();
-                        buttons(submenu, b.submenu);
+                        buttons(submenu, b.submenu.toArray());
                     }else{
                         currentMenu = null;
                         fadeOutMenu();
@@ -296,7 +319,7 @@ public class MenuFragment{
         /** Runnable ran when the button is clicked. Ignored on desktop if {@link #submenu} is not null. */
         public final Runnable runnable;
         /** Submenu shown when this button is clicked. Used instead of {@link #runnable} on desktop. */
-        public final @Nullable MenuButton[] submenu;
+        public final @Nullable Seq<MenuButton> submenu;
 
         /** Constructs a simple menu button, which behaves the same way on desktop and mobile. */
         public MenuButton(String text, Drawable icon, Runnable runnable){
@@ -311,7 +334,7 @@ public class MenuFragment{
             this.icon = icon;
             this.text = text;
             this.runnable = runnable;
-            this.submenu = submenu;
+            this.submenu = submenu != null ? Seq.with(submenu) : null;
         }
 
         /** Comstructs a desktop-only button; used internally. */
@@ -319,7 +342,7 @@ public class MenuFragment{
             this.icon = icon;
             this.text = text;
             this.runnable = () -> {};
-            this.submenu = submenu;
+            this.submenu = submenu != null ? Seq.with(submenu) : null;
         }
     }
 }

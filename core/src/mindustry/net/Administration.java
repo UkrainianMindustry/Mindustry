@@ -13,6 +13,9 @@ import mindustry.type.*;
 import mindustry.world.*;
 import mindustry.world.blocks.payloads.*;
 
+import java.io.*;
+import java.util.regex.*;
+
 import static mindustry.Vars.*;
 import static mindustry.game.EventType.*;
 
@@ -24,7 +27,7 @@ public class Administration{
     public Seq<String> subnetBans = new Seq<>();
     public ObjectSet<String> dosBlacklist = new ObjectSet<>();
     public ObjectMap<String, Long> kickedIPs = new ObjectMap<>();
-
+    public Seq<Pattern> bannedNames = new Seq<>();
 
     private boolean modified, loaded;
     /** All player info. Maps UUIDs to info. This persists throughout restarts. Do not modify directly. */
@@ -69,7 +72,7 @@ public class Administration{
             if(action.type != ActionType.breakBlock &&
                 action.type != ActionType.placeBlock &&
                 action.type != ActionType.commandUnits &&
-                Config.antiSpam.bool() && !player.isLocal()){
+                Config.antiSpam.bool() && !action.player.isLocal()){
 
                 Ratekeeper rate = action.player.getInfo().rate;
                 if(rate.allow(Config.interactRateWindow.num() * 1000L, Config.interactRateLimit.num())){
@@ -90,6 +93,10 @@ public class Administration{
 
     public synchronized void blacklistDos(String address){
         dosBlacklist.add(address);
+    }
+
+    public synchronized void unBlacklistDos(String address){
+        dosBlacklist.remove(address);
     }
 
     public synchronized boolean isDosBlacklisted(String address){
@@ -126,6 +133,11 @@ public class Administration{
 
     public boolean isSubnetBanned(String ip){
         return subnetBans.contains(ip::startsWith);
+    }
+
+    public void addNameBan(String regex) throws PatternSyntaxException{
+        bannedNames.add(Pattern.compile(regex, Pattern.CASE_INSENSITIVE));
+        save();
     }
 
     /** Adds a chat filter. This will transform the chat messages of every player.
@@ -373,6 +385,10 @@ public class Administration{
         return getCreateInfo(uuid).banned;
     }
 
+    public boolean isNameBanned(String name){
+        return bannedNames.size > 0 && bannedNames.contains(p -> p.matcher(name).find());
+    }
+
     public boolean isAdmin(String id, String usid){
         PlayerInfo info = getCreateInfo(id);
         return info.admin && usid.equals(info.adminUsid);
@@ -461,6 +477,7 @@ public class Administration{
             Core.settings.putJson("ip-bans", String.class, bannedIPs);
             Core.settings.putJson("whitelist-ids", String.class, whitelist);
             Core.settings.putJson("banned-subnets", String.class, subnetBans);
+            Core.settings.putJson("banned-names", String.class, bannedNames.map(Pattern::pattern));
             modified = false;
         }
     }
@@ -474,6 +491,14 @@ public class Administration{
         bannedIPs = Core.settings.getJson("ip-bans", Seq.class, Seq::new);
         whitelist = Core.settings.getJson("whitelist-ids", Seq.class, Seq::new);
         subnetBans = Core.settings.getJson("banned-subnets", Seq.class, Seq::new);
+
+        Seq<String> nameRegexes = Core.settings.getJson("banned-names", Seq.class, String.class, Seq::new);
+        for(var regex : nameRegexes){
+            try{
+                bannedNames.add(Pattern.compile(regex, Pattern.CASE_INSENSITIVE));
+            }catch(Exception ignored){
+            }
+        }
     }
 
     /**
@@ -515,7 +540,8 @@ public class Administration{
         snapshotInterval = new Config("snapshotInterval", "Client entity snapshot interval in ms.", 200),
         autoPause = new Config("autoPause", "Whether the game should pause when nobody is online.", false),
         roundExtraTime = new Config("roundExtraTime", "Time before loading a new map after the gameover, in seconds.", 12),
-        maxLogLength = new Config("maxLogLength", "The Maximum log file size, in bytes.", 1024 * 1024 * 5);
+        maxLogLength = new Config("maxLogLength", "The Maximum log file size, in bytes.", 1024 * 1024 * 5),
+        logCommands = new Config("logCommands", "Whether player commands should be logged.", true);
 
         public final Object defaultValue;
         public final String name, key, description;
@@ -577,12 +603,16 @@ public class Administration{
             changed.run();
         }
 
+        public boolean isDefault(){
+            return Structs.eq(get(), defaultValue);
+        }
+
         private static boolean debug(){
             return Config.debug.bool();
         }
     }
 
-    public static class PlayerInfo{
+    public static class PlayerInfo implements Serializable{
         public String id;
         public String lastName = "<unknown>", lastIP = "<unknown>";
         public Seq<String> ips = new Seq<>();
@@ -624,14 +654,15 @@ public class Administration{
     }
 
     public static class TraceInfo{
-        public String ip, uuid;
+        public String ip, uuid, locale;
         public boolean modded, mobile;
         public int timesJoined, timesKicked;
         public String[] ips, names;
 
-        public TraceInfo(String ip, String uuid, boolean modded, boolean mobile, int timesJoined, int timesKicked, String[] ips, String[] names){
+        public TraceInfo(String ip, String uuid, String locale, boolean modded, boolean mobile, int timesJoined, int timesKicked, String[] ips, String[] names){
             this.ip = ip;
             this.uuid = uuid;
+            this.locale = locale;
             this.modded = modded;
             this.mobile = mobile;
             this.timesJoined = timesJoined;
@@ -674,6 +705,10 @@ public class Administration{
         /** valid only for command building events */
         public @Nullable int[] buildingPositions;
 
+        /** valid only for location pings */
+        public @Nullable String pingText;
+        public float pingX, pingY;
+
         public PlayerAction set(Player player, ActionType type, Tile tile){
             this.player = player;
             this.type = type;
@@ -703,7 +738,7 @@ public class Administration{
     }
 
     public enum ActionType{
-        breakBlock, placeBlock, rotate, configure, withdrawItem, depositItem, control, buildSelect, command, removePlanned, commandUnits, commandBuilding, respawn, pickupBlock, dropPayload
+        breakBlock, placeBlock, rotate, configure, withdrawItem, depositItem, control, buildSelect, command, removePlanned, commandUnits, commandBuilding, respawn, pickupBlock, dropPayload, pingLocation
     }
 
 }

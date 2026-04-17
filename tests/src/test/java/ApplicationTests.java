@@ -14,20 +14,19 @@ import mindustry.core.GameState.*;
 import mindustry.ctype.*;
 import mindustry.entities.units.*;
 import mindustry.game.*;
+import mindustry.game.MapObjectives.*;
 import mindustry.gen.*;
-import mindustry.graphics.g3d.*;
 import mindustry.io.*;
-import mindustry.io.SaveIO.*;
 import mindustry.maps.*;
 import mindustry.mod.*;
 import mindustry.mod.Mods.*;
 import mindustry.net.*;
 import mindustry.net.Packets.*;
-import mindustry.service.*;
 import mindustry.type.*;
 import mindustry.world.*;
 import mindustry.world.blocks.payloads.*;
 import mindustry.world.blocks.storage.*;
+import org.json.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.*;
 import org.junit.jupiter.params.provider.*;
@@ -107,7 +106,7 @@ public class ApplicationTests{
                 public void init(){
                     super.init();
                     begins[0] = true;
-                    testMap = maps.loadInternalMap("groundZero");
+                    testMap = maps.loadInternalMap("serpulo/groundZero");
                     Thread.currentThread().interrupt();
                 }
             };
@@ -227,13 +226,16 @@ public class ApplicationTests{
 
     @Test
     void serverListJson(){
-        String[] files = {"servers_v6.json", "servers_v7.json", "servers_be.json"};
+        String[] files = {"servers_v6.json", "servers_v7.json"};
+
 
         for(String file : files){
             try{
                 String str = Core.files.absolute("./../../" + file).readString();
                 assertEquals(ValueType.array, new JsonReader().parse(str).type());
                 assertTrue(Jval.read(str).isArray());
+                JSONArray array = new JSONArray(str);
+                assertTrue(array.length() > 0);
             }catch(Exception e){
                 fail("Failed to parse " + file, e);
             }
@@ -602,13 +604,15 @@ public class ApplicationTests{
 
         entities.each(Building::updateProximity);
 
+        final int iterations = 100_000;
+
         //warmup
-        for(int i = 0; i < 100000; i++){
+        for(int i = 0; i < iterations; i++){
             entities.each(Building::update);
         }
 
         Time.mark();
-        for(int i = 0; i < 200000; i++){
+        for(int i = 0; i < iterations*2; i++){
             entities.each(Building::update);
         }
         Log.info(Time.elapsed() + "ms to process " + itemsa[0] + " items");
@@ -650,6 +654,26 @@ public class ApplicationTests{
 
         assertEquals(500, world.width());
         assertEquals(500, world.height());
+    }
+
+    @Test
+    void load152BESave(){
+        resetWorld();
+        SaveIO.load(Core.files.internal("152_be.msav"));
+
+        assertEquals(414, world.width());
+        assertEquals(414, world.height());
+    }
+
+    @Test
+    void load152Save(){
+        resetWorld();
+        SaveIO.load(Core.files.internal("152.msav"));
+
+        assertTrue(Groups.unit.contains(u -> u.type == UnitTypes.scepter));
+
+        assertEquals(2000, world.width());
+        assertEquals(195, world.height());
     }
 
     @Test
@@ -875,23 +899,35 @@ public class ApplicationTests{
         Seq<DynamicTest> out = new Seq<>();
         if(world == null) world = new World();
 
-        for(SectorPreset zone : content.sectors()){
+        for(SectorPreset sector : content.sectors()){
 
-            out.add(dynamicTest(zone.name, () -> {
+            out.add(dynamicTest(sector.name, () -> {
                 Time.setDeltaProvider(() -> 1f);
 
                 logic.reset();
-                state.rules.sector = zone.sector;
-                try{
-                    world.loadGenerator(zone.generator.map.width, zone.generator.map.height, zone.generator::generate);
-                }catch(SaveException e){
-                    //fails randomly and I don't care about fixing it
-                    e.printStackTrace();
-                    return;
-                }
-                zone.rules.get(state.rules);
+                //pathfinder pollutes queue with garbage, causing OOM
+                Reflect.<TaskQueue>get(HeadlessApplication.class, Core.app, "runnables").clear();
+                state.rules.sector = sector.sector;
+                world.loadGenerator(sector.generator.map.width, sector.generator.map.height, tiles -> sector.generator.generate(tiles, new WorldParams()));
+                sector.rules.get(state.rules);
                 ObjectSet<Item> resources = new ObjectSet<>();
                 boolean hasSpawnPoint = false;
+
+                assertFalse(state.rules.infiniteResources || Team.sharded.rules().infiniteResources, "Sector " + sector.name + " must not have infinite resources.");
+                assertFalse(state.rules.allowEditRules, "Sector " + sector.name + " must not have rule editing enabled.");
+                assertFalse(state.rules.allowEditWorldProcessors, "Sector " + sector.name + " must not have world processor editing enabled.");
+                assertEquals(Team.sharded, state.rules.defaultTeam, "Sector " + sector.name + " must have the Sharded player team.");
+                assertEquals(Vars.state.getPlanet() == Planets.serpulo ? Team.crux : Team.malis, state.rules.waveTeam, "Sector " + sector.name + " must have the correct enemy team.");
+
+                Seq<TimerObjective> timers = state.rules.objectives.all.select(m -> m instanceof TimerObjective && !m.hidden && ((TimerObjective)m).text != null &&
+                !((TimerObjective)m).text.isEmpty() && !((TimerObjective)m).text.contains("@")).as();
+
+                if(!timers.isEmpty()){
+                    fail("Sector " + sector.name + " has unlocalized objectives: " + timers.toString(", ", t -> "'" + t.text + "'"));
+                }
+
+                //TODO: some Erekir sectors (origin, caldera) modify the cap, why?
+                //assertEquals(0, state.rules.unitCap, "Sector " + sector.name + " must not modify the unit cap.");
 
                 for(Tile tile : world.tiles){
                     if(tile.drop() != null){
@@ -923,28 +959,30 @@ public class ApplicationTests{
                     if(state.rules.attackMode){
                         bossWave = 100;
                     }else{
-                        assertNotEquals(0, bossWave, "Sector " + zone.name + " doesn't have a boss/end wave.");
+                        assertNotEquals(0, bossWave, "Sector " + sector.name + " doesn't have a boss/end wave.");
                     }
 
                     if(state.rules.winWave > 0) bossWave = state.rules.winWave - 1;
 
-                    //TODO check for difficulty?
                     for(int i = 1; i <= bossWave; i++){
                         int total = 0;
                         for(SpawnGroup spawn : spawns){
                             total += spawn.getSpawned(i - 1);
                         }
 
-                        assertNotEquals(0, total, "Sector " + zone + " has no spawned enemies at wave " + i);
-                        //TODO this is flawed and needs to be changed later
-                        //assertTrue(total < 75, "Sector spawns too many enemies at wave " + i + " (" + total + ")");
+                        assertNotEquals(0, total, "Sector " + sector + " has no spawned enemies at wave " + i);
                     }
                 }
 
-                assertEquals(1, Team.sharded.cores().size, "Sector must have one core: " + zone);
+                assertFalse(Vars.indexer.isBlockPresent(Blocks.powerSource), "Sector '" + sector + "' must not have power sources.");
+                assertFalse(Vars.indexer.isBlockPresent(Blocks.powerVoid), "Sector '" + sector + "' must not have power voids.");
+                assertFalse(Vars.indexer.isBlockPresent(Blocks.itemSource), "Sector '" + sector + "' must not have item sources.");
+                assertFalse(Vars.indexer.isBlockPresent(Blocks.liquidSource), "Sector '" + sector + "' must not have liquid sources.");
 
-                assertTrue(hasSpawnPoint, "Sector \"" + zone.name + "\" has no spawn points.");
-                assertTrue(spawner.countSpawns() > 0 || (state.rules.attackMode && state.rules.waveTeam.data().hasCore()), "Sector \"" + zone.name + "\" has no enemy spawn points: " + spawner.countSpawns());
+                assertEquals(1, Team.sharded.cores().size, "Sector must have one core: " + sector + " (" + Team.sharded.cores() + ")");
+
+                assertTrue(hasSpawnPoint, "Sector \"" + sector.name + "\" has no spawn points.");
+                assertTrue(spawner.countSpawns() > 0 || (state.rules.attackMode && state.rules.waveTeam.data().hasCore()), "Sector \"" + sector.name + "\" has no enemy spawn points: " + spawner.countSpawns());
             }));
         }
 
@@ -982,17 +1020,5 @@ public class ApplicationTests{
 
         tile.build.handleStack(item, 1, unit);
         assertEquals(capacity, tile.build.items.get(item));
-    }
-
-    @Test
-    void achievementTest(){
-        clientLoaded = true;
-        state.rules.sector = new Sector(null, PlanetGrid.Ptile.empty);
-        player = Player.create();
-        service.init();
-
-        assertFalse(Achievement.buildT5.isAchieved());
-        Events.fire(new EventType.UnitCreateEvent(UnitTypes.eclipse.create(Team.sharded), null));
-        assertTrue(Achievement.buildT5.isAchieved());
     }
 }

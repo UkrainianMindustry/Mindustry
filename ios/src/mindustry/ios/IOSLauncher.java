@@ -18,6 +18,7 @@ import org.robovm.apple.coregraphics.*;
 import org.robovm.apple.foundation.*;
 import org.robovm.apple.uikit.*;
 import org.robovm.objc.block.*;
+import rhino.*;
 
 import java.io.*;
 import java.util.*;
@@ -138,6 +139,19 @@ public class IOSLauncher extends IOSApplication.Delegate{
             }
 
             @Override
+            public void showMultiFileChooser(Cons<Fi> cons, String... extensions){
+                showFileChooser(true, extensions[0], cons);
+            }
+
+            @Override
+            public Context getScriptContext(){
+                Context context = Context.getCurrentContext();
+                if(context == null) context = Context.enter();
+                context.setOptimizationLevel(-1);
+                return context;
+            }
+
+            @Override
             public void shareFile(Fi file){
                 try{
                     Log.info("Attempting to share file " + file);
@@ -174,7 +188,9 @@ public class IOSLauncher extends IOSApplication.Delegate{
                 forced = false;
                 UINavigationController.attemptRotationToDeviceOrientation();
             }
-        }, new IOSApplicationConfiguration());
+        }, new IOSApplicationConfiguration(){{
+            useGL30 = true;
+        }});
     }
 
     @Override
@@ -248,7 +264,7 @@ public class IOSLauncher extends IOSApplication.Delegate{
             UIApplication.main(argv, null, IOSLauncher.class);
         }catch(Throwable t){
             //attempt to log the exception
-            CrashSender.log(t);
+            CrashHandler.log(t);
             Log.err(t);
             //rethrow the exception so it actually crashes
             throw t;

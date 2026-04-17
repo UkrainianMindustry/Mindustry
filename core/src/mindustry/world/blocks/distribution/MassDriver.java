@@ -18,6 +18,7 @@ import mindustry.graphics.*;
 import mindustry.logic.*;
 import mindustry.type.*;
 import mindustry.world.*;
+import mindustry.world.blocks.*;
 import mindustry.world.meta.*;
 
 import static mindustry.Vars.*;
@@ -35,7 +36,9 @@ public class MassDriver extends Block{
     public Effect shootEffect = Fx.shootBig2;
     public Effect smokeEffect = Fx.shootBigSmoke2;
     public Effect receiveEffect = Fx.mineBig;
-    public Sound shootSound = Sounds.shootBig;
+    public Sound shootSound = Sounds.massdriver;
+    public Sound receiveSound = Sounds.massdriverReceive;
+    public float shootSoundVolume = 0.5f;
     public float shake = 3f;
     public @Load("@-base") TextureRegion baseRegion;
 
@@ -104,13 +107,18 @@ public class MassDriver extends Block{
         }
     }
 
-    public class MassDriverBuild extends Building{
+    public class MassDriverBuild extends Building implements RotBlock{
         public int link = -1;
         public float rotation = 90;
         public float reloadCounter = 0f;
         public DriverState state = DriverState.idle;
         //TODO use queue? this array usually holds about 3 shooters max anyway
         public OrderedSet<Building> waitingShooters = new OrderedSet<>();
+
+        @Override
+        public float buildRotation(){
+            return rotation;
+        }
 
         public Building currentShooter(){
             return waitingShooters.isEmpty() ? null : waitingShooters.first();
@@ -209,7 +217,7 @@ public class MassDriver extends Block{
 
         @Override
         public double sense(LAccess sensor){
-            if(sensor == LAccess.progress) return Mathf.clamp(1f - reloadCounter / reload);
+            if(sensor == LAccess.progress) return Mathf.clamp(1f - reloadCounter);
             return super.sense(sensor);
         }
 
@@ -242,7 +250,7 @@ public class MassDriver extends Block{
 
             if(linkValid()){
                 Building target = world.build(link);
-                Drawf.circles(target.x, target.y, (target.block().size / 2f + 1) * tilesize + sin - 2f, Pal.place);
+                Drawf.circles(target.x, target.y, (target.block.size / 2f + 1) * tilesize + sin - 2f, Pal.place);
                 Drawf.arrow(x, y, target.x, target.y, size * tilesize + sin, 4f + sin);
             }
 
@@ -293,14 +301,14 @@ public class MassDriver extends Block{
 
             bullet.create(this, team,
                 x + Angles.trnsx(angle, translation), y + Angles.trnsy(angle, translation),
-                angle, -1f, bulletSpeed, bulletLifetime, data);
+                angle, totalUsed/2f, bulletSpeed, bulletLifetime, data);
 
             shootEffect.at(x + Angles.trnsx(angle, translation), y + Angles.trnsy(angle, translation), angle);
             smokeEffect.at(x + Angles.trnsx(angle, translation), y + Angles.trnsy(angle, translation), angle);
 
             Effect.shake(shake, shake, this);
-            
-            shootSound.at(tile, Mathf.random(0.9f, 1.1f));
+
+            shootSound.at(x, y, 1f + Mathf.range(0.2f), shootSoundVolume);
         }
 
         public void handlePayload(Bullet bullet, DriverBulletData data){
@@ -320,6 +328,7 @@ public class MassDriver extends Block{
 
             Effect.shake(shake, shake, this);
             receiveEffect.at(bullet);
+            receiveSound.at(x, y, 1f + Mathf.range(0.2f), shootSoundVolume);
 
             reloadCounter = 1f;
             bullet.remove();

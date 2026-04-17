@@ -57,6 +57,9 @@ public class AssetsProcess extends BaseProcessor{
         ichtype.addField(FieldSpec.builder(ParameterizedTypeName.get(ObjectIntMap.class, String.class),
             "codes", Modifier.PUBLIC, Modifier.STATIC, Modifier.FINAL).initializer("new ObjectIntMap<>()").build());
 
+        ichtype.addField(FieldSpec.builder(ParameterizedTypeName.get(IntMap.class, String.class),
+            "codeToName", Modifier.PUBLIC, Modifier.STATIC, Modifier.FINAL).initializer("new IntMap<>()").build());
+
         ObjectSet<String> used = new ObjectSet<>();
 
         for(Jval val : icons.get("glyphs").asArray()){
@@ -67,7 +70,9 @@ public class AssetsProcess extends BaseProcessor{
             int code = val.getInt("code", 0);
             iconcAll.append((char)code);
             ichtype.addField(FieldSpec.builder(char.class, name, Modifier.PUBLIC, Modifier.STATIC, Modifier.FINAL).addJavadoc(String.format("\\u%04x", code)).initializer("'" + ((char)code) + "'").build());
+
             ichinit.addStatement("codes.put($S, $L)", name, code);
+            ichinit.addStatement("codeToName.put($L, $S)", code, name);
 
             ictype.addField(TextureRegionDrawable.class, name + "Small", Modifier.PUBLIC, Modifier.STATIC);
             icload.addStatement(name + "Small = mindustry.ui.Fonts.getGlyph(mindustry.ui.Fonts.def, (char)" + code + ")");
@@ -178,7 +183,11 @@ public class AssetsProcess extends BaseProcessor{
         }
 
         if(classname.equals("Sounds")){
-            type.addField(FieldSpec.builder(ClassName.bestGuess(rtype), "none", Modifier.STATIC, Modifier.PUBLIC).initializer("new " + rtype + "()").build());
+            type.addField(FieldSpec.builder(ClassName.bestGuess(rtype), "none", Modifier.STATIC, Modifier.PUBLIC).initializer("new " + rtype + "()")
+            .addJavadoc("Does not play anything.").build());
+
+            type.addField(FieldSpec.builder(ClassName.bestGuess(rtype), "unset", Modifier.STATIC, Modifier.PUBLIC).initializer("new " + rtype + "()")
+            .addJavadoc("Used a placeholder value for unset default values. This is usually reassigned in init() of the relevant block or unit. Does not play anything.").build());
         }
 
         type.addMethod(loadBegin.build());

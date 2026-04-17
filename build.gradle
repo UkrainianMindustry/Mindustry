@@ -1,44 +1,49 @@
+import java.text.SimpleDateFormat
+
 buildscript{
     ext{
-        getArcHash = {
-            return new Properties().with{ p -> p.load(file('gradle.properties').newReader()); return p }["archash"]
-        }
+        arcHash = property("archash")
 
-        arcHash = getArcHash()
+        localArc = new File(rootDir.parent, 'Arc').exists() && !project.hasProperty("noLocalArc")
+
+        arcModule = { String name ->
+            //skip to last submodule
+            name = name.substring(name.lastIndexOf(':') + 1)
+            return "com.github.Anuken${localArc ? "" : ".Arc"}:$name:$arcHash"
+        }
     }
-    
+
     repositories{
         mavenLocal()
         mavenCentral()
         google()
-        maven{ url "https://oss.sonatype.org/content/repositories/snapshots/" }
-        maven{ url 'https://jitpack.io' }
+        maven{ url = 'https://jitpack.io' }
     }
 
     dependencies{
-        classpath "com.github.Anuken.Arc:packer:$arcHash"
-        classpath "com.github.Anuken.Arc:arc-core:$arcHash"
+        classpath arcModule(":extensions:packer")
+        classpath arcModule(":arc-core")
     }
 }
 
 plugins{
-    id "org.jetbrains.kotlin.jvm" version "1.6.0"
-    id "org.jetbrains.kotlin.kapt" version "1.6.0"
+    id "org.jetbrains.kotlin.jvm" version "2.3.20"
+    id "org.jetbrains.kotlin.kapt" version "2.3.20"
 }
 
 allprojects{
     apply plugin: 'maven-publish'
-    
+
     version = project.hasProperty("packageVersion") ? project.getProperty("packageVersion") : 'release'
     group = 'com.github.Anuken'
 
     ext{
-        versionNumber = '7'
+        versionNumber = '8'
         if(!project.hasProperty("versionModifier")) versionModifier = 'release'
         if(!project.hasProperty("versionType")) versionType = 'official'
         appName = 'Mindustry'
         steamworksVersion = '0b86023401880bb5e586bc404bedbaae9b1f1c94'
-        rhinoVersion = '73a812444ac388ac2d94013b5cadc8f70b7ea027'
+        rhinoVersion = '54b75cbd1207ef1fd5cff517cbd188e763c85baa'
 
         loadVersionProps = {
             return new Properties().with{p -> p.load(file('../core/assets/version.properties').newReader()); return p }
@@ -46,20 +51,6 @@ allprojects{
 
         debugged = {
             return new File(projectDir.parent, '../Mindustry-Debug').exists() && !project.hasProperty("release") && project.hasProperty("args")
-        }
-
-        localArc = {
-            return !project.hasProperty("release") && !project.hasProperty("noLocalArc") && new File(projectDir.parent, '../Arc').exists()
-        }
-
-        arcModule = { String name ->
-            if(localArc()){
-                return project(":Arc:$name")
-            }else{
-                //skip to last submodule
-                if(name.contains(':')) name = name.split(':').last()
-                return "com.github.Anuken.Arc:$name:${getArcHash()}"
-            }
         }
 
         generateDeployName = { String platform ->
@@ -99,6 +90,10 @@ allprojects{
             return project.getProperties()["buildversion"]
         }
 
+        getCommitHash = {
+            return 'git rev-parse --verify --short HEAD'.execute().text.trim()
+        }
+
         getPackage = {
             return project.ext.mainClassName.substring(0, project.ext.mainClassName.indexOf("desktop") - 1)
         }
@@ -116,12 +111,12 @@ allprojects{
         generateLocales = {
             def output = 'en\n'
             def bundles = new File(project(':core').projectDir, 'assets/bundles/')
-            bundles.listFiles().each{ other ->
-                if(other.name == "bundle.properties") return
-                output += other.name.substring("bundle".length() + 1, other.name.lastIndexOf('.')) + "\n"
+            bundles.list().sort().each{ name ->
+                if(name == "bundle.properties" || name == "global.properties") return
+                output += name.substring("bundle".length() + 1, name.lastIndexOf('.')) + "\n"
             }
             new File(project(':core').projectDir, 'assets/locales').text = output
-            new File(project(':core').projectDir, 'assets/basepartnames').text = new File(project(':core').projectDir, 'assets/baseparts/').list().join("\n")
+            new File(project(':core').projectDir, 'assets/basepartnames').text = new File(project(':core').projectDir, 'assets/baseparts/').list().sort().findAll{f -> f.endsWith(".msch")}.join("\n")
         }
 
         writeVersion = {
@@ -143,6 +138,11 @@ allprojects{
                 props["number"] = versionNumber
                 props["modifier"] = versionModifier
                 props["build"] = buildid
+                props["buildDate"] = new SimpleDateFormat("MMMM d, yyyy HH:mm a", Locale.getDefault()).format(new Date())
+                props["commitHash"] = "unknown"
+                if(project.hasProperty("showCommitHash")){
+                    props["commitHash"] = getCommitHash()
+                }
 
                 props.store(pfile.newWriter(), "Autogenerated file. Do not modify.")
             }
@@ -180,9 +180,8 @@ allprojects{
     repositories{
         mavenLocal()
         mavenCentral()
-        maven{ url "https://oss.sonatype.org/content/repositories/snapshots/" }
-        maven{ url "https://oss.sonatype.org/content/repositories/releases/" }
-        maven{ url 'https://jitpack.io' }
+        maven{ url = "https://central.sonatype.com/repository/maven-snapshots" }
+        maven{ url = 'https://jitpack.io' }
     }
 
     task clearCache{
@@ -195,7 +194,7 @@ allprojects{
 
     tasks.withType(JavaCompile){
         targetCompatibility = 8
-        sourceCompatibility = JavaVersion.VERSION_16
+        sourceCompatibility = JavaVersion.VERSION_17
         options.encoding = "UTF-8"
         options.compilerArgs += ["-Xlint:deprecation"]
         dependsOn clearCache
@@ -222,7 +221,7 @@ configure(project(":annotations")){
 }
 
 //compile with java 8 compatibility for everything except the annotation project
-configure(subprojects - project(":annotations")){
+configure(subprojects - project(":annotations") - project(":tests")){
     tasks.withType(JavaCompile){
         options.compilerArgs.addAll(['--release', '8'])
     }
@@ -230,7 +229,7 @@ configure(subprojects - project(":annotations")){
     tasks.withType(Javadoc){
         options{
             addStringOption('Xdoclint:none', '-quiet')
-            addStringOption('-release', '16')
+            addStringOption('-release', '17')
             encoding('UTF-8')
         }
     }
@@ -243,7 +242,10 @@ project(":desktop"){
 
     dependencies{
         implementation project(":core")
+        implementation arcModule("extensions:profiling")
         implementation arcModule("extensions:discord")
+        implementation arcModule("natives:natives-filedialogs")
+        implementation arcModule("extensions:filedialogs")
         implementation arcModule("natives:natives-desktop")
         implementation arcModule("natives:natives-freetype-desktop")
 
@@ -252,6 +254,7 @@ project(":desktop"){
         implementation "com.github.Anuken:steamworks4j:$steamworksVersion"
 
         implementation arcModule("backends:backend-sdl")
+        annotationProcessor 'com.github.Anuken:jabel:0.9.0'
     }
 }
 
@@ -262,7 +265,7 @@ project(":core"){
 
     kapt{
         javacOptions{
-            option("-source", "16")
+            option("-source", "17")
             option("-target", "1.8")
         }
     }
@@ -301,6 +304,27 @@ project(":core"){
         }
     }
 
+    task depsJar(type: Jar, dependsOn: [classes, ":server:dist"]){
+        archiveClassifier = 'deps'
+        from files(sourceSets.main.output.classesDirs)
+        from{ configurations.runtimeClasspath.collect{ it.isDirectory() ? it : zipTree(it) } }
+        from zipTree("../server/build/libs/server-release.jar")
+        from files("src/")
+        from files("../../Arc/arc-core/src/")
+        from files("../../Arc/extensions/arcnet/src/")
+        from files("../../Arc/extensions/g3d/src/")
+        from files("../../Arc/extensions/flabel/src/")
+        from files("../../Arc/extensions/freetype/src/")
+        from files("../server/src/")
+
+        exclude("META-INF/**")
+        exclude("vfxshaders/**")
+        exclude("maps/**")
+        exclude("baseparts/**")
+        exclude("vfxshaders/**")
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    }
+
     task sourcesJar(type: Jar, dependsOn: classes){
         archiveClassifier = 'sources'
         from sourceSets.main.allSource
@@ -309,7 +333,7 @@ project(":core"){
     task assetsJar(type: Jar, dependsOn: ":tools:pack"){
         archiveClassifier = 'assets'
         from files("assets"){
-            exclude "config", "cache", "music", "sounds"
+            exclude "config", "cache", "music", "sounds", "sprites/fallback"
         }
     }
 
@@ -323,7 +347,7 @@ project(":core"){
     dependencies{
         compileJava.dependsOn(preGen)
 
-        api "org.lz4:lz4-java:1.8.0"
+        api "at.yawk.lz4:lz4-java:1.10.2"
         api arcModule("arc-core")
         api arcModule("extensions:flabel")
         api arcModule("extensions:freetype")
@@ -331,12 +355,12 @@ project(":core"){
         api arcModule("extensions:fx")
         api arcModule("extensions:arcnet")
         api "com.github.Anuken:rhino:$rhinoVersion"
-        if(localArc() && debugged()) api arcModule("extensions:recorder")
-        if(localArc()) api arcModule(":extensions:packer")
+        if(localArc && debugged()) api arcModule("extensions:recorder")
+        if(localArc) api arcModule(":extensions:packer")
 
         annotationProcessor 'com.github.Anuken:jabel:0.9.0'
         compileOnly project(":annotations")
-        kapt project(":annotations")
+        if(!project.hasProperty("noKapt")) kapt project(":annotations")
     }
 
     afterEvaluate{
@@ -365,7 +389,6 @@ project(":core"){
         //these are completely unnecessary
         tasks.kaptGenerateStubsKotlin.onlyIf{ false }
         tasks.compileKotlin.onlyIf{ false }
-        tasks.inspectClassesForKotlinIC.onlyIf{ false }
     }
 
     //comp** classes are only used for code generation
@@ -380,6 +403,7 @@ project(":server"){
     dependencies{
         implementation project(":core")
         implementation arcModule("backends:backend-headless")
+        annotationProcessor 'com.github.Anuken:jabel:0.9.0'
     }
 }
 
@@ -391,12 +415,21 @@ project(":tests"){
         testImplementation "org.junit.jupiter:junit-jupiter-params:5.7.1"
         testImplementation "org.junit.jupiter:junit-jupiter-api:5.7.1"
         testImplementation arcModule("backends:backend-headless")
+        testImplementation "org.json:json:20230618"
         testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.7.1"
+        testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    }
+
+    tasks.withType(JavaCompile){
+        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        options.compilerArgs.addAll(['--release', '17'])
     }
 
     test{
         //fork every test so mods don't interact with each other
         forkEvery = 1
+        jvmArgs = ["-XX:+HeapDumpOnOutOfMemoryError"]
         useJUnitPlatform()
         workingDir = new File("../core/assets")
         testLogging{
@@ -415,6 +448,9 @@ project(":tools"){
         implementation arcModule("natives:natives-desktop")
         implementation arcModule("natives:natives-freetype-desktop")
         implementation arcModule("backends:backend-headless")
+
+        implementation("com.google.guava:guava:33.3.1-jre")
+        annotationProcessor 'com.github.Anuken:jabel:0.9.0'
     }
 }
 
@@ -423,7 +459,7 @@ project(":annotations"){
 
     dependencies{
         implementation 'com.squareup:javapoet:1.12.1'
-        implementation "com.github.Anuken.Arc:arc-core:$arcHash"
+        implementation arcModule("arc-core")
     }
 }
 
@@ -437,9 +473,6 @@ configure([":core", ":server"].collect{project(it)}){
         publications{
             maven(MavenPublication){
                 from components.java
-                if(project.name == "core"){
-                    artifact(tasks.named("assetsJar"))
-                }
             }
         }
     }
@@ -460,7 +493,6 @@ task deployAll{
     dependsOn cleanDeployOutput
     dependsOn "desktop:packrLinux64"
     dependsOn "desktop:packrWindows64"
-    dependsOn "desktop:packrWindows32"
     dependsOn "desktop:packrMacOS"
     if(versionModifier != "steam"){
         dependsOn "server:deploy"

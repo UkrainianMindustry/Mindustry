@@ -17,6 +17,8 @@ public class Packets{
         nameInUse, idInUse, nameEmpty, customClient, serverClose, vote, typeMismatch,
         whitelist, playerLimit, serverRestarting;
 
+        public static final KickReason[] all = values();
+
         public final boolean quiet;
 
         KickReason(){
@@ -38,7 +40,9 @@ public class Packets{
     }
 
     public enum AdminAction{
-        kick, ban, trace, wave, switchTeam
+        kick, ban, trace, wave, switchTeam;
+
+        public static final AdminAction[] all = values();
     }
 
     /** Generic client connection event. */
@@ -74,6 +78,11 @@ public class Packets{
         public byte type;
 
         @Override
+        public boolean allow(boolean server){
+            return !server;
+        }
+
+        @Override
         public void write(Writes buffer){
             buffer.i(id);
             buffer.i(total);
@@ -91,6 +100,11 @@ public class Packets{
     public static class StreamChunk extends Packet{
         public int id;
         public byte[] data;
+
+        @Override
+        public boolean allow(boolean server){
+            return !server;
+        }
 
         @Override
         public void write(Writes buffer){
@@ -152,6 +166,11 @@ public class Packets{
             for(int i = 0; i < totalMods; i++){
                 mods.add(TypeIO.readString(buffer));
             }
+        }
+
+        @Override
+        public int getPriority(){
+            return priorityHigh;
         }
     }
 }
